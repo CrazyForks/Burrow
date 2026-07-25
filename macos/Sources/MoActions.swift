@@ -272,7 +272,7 @@ enum MoActions {
 enum ActionWire {
     static func result(command: String, dryRun: Bool, ran: Bool, exitCode: Int32,
                        output: String, apps: [String]? = nil, permanent: Bool? = nil,
-                       note: String? = nil) -> String {
+                       note: String? = nil, timedOutAfter: TimeInterval? = nil) -> String {
         let stripped = Ansi.strip(output)
         var obj: [String: Any] = [
             "command": command,
@@ -289,6 +289,14 @@ enum ActionWire {
         if let note {
             obj["interactive_only"] = true
             obj["note"] = note
+        }
+        // A killed run otherwise reads as a bare non-zero exit with empty
+        // output (observed in the wild as `exit_code: 9, output: ""`) —
+        // say what actually happened.
+        if let timedOutAfter {
+            obj["timed_out"] = true
+            obj["hint"] = "mo \(command) was killed after \(Int(timedOutAfter))s without finishing"
+                + " — retry, or run it from the Burrow app"
         }
         return json(obj)
     }

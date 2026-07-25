@@ -212,6 +212,20 @@ final class MoActionsTests: XCTestCase {
         XCTAssertEqual(obj["output"] as? String, transcript, "raw output stays — additive only")
     }
 
+    func testWire_timedOutRun_isByteStable_andSaysWhatHappened() {
+        // Observed in real agent transcripts: a killed clean rendered as
+        // `{"exit_code":9,"output":"","ran":false}` — nothing actionable.
+        let json = ActionWire.result(command: "clean", dryRun: true, ran: false,
+                                     exitCode: 9, output: "", timedOutAfter: 600)
+        XCTAssertEqual(json, #"{"command":"clean","dry_run":true,"exit_code":9,"hint":"mo clean was killed after 600s without finishing — retry, or run it from the Burrow app","output":"","ran":false,"timed_out":true}"#)
+    }
+
+    func testWire_untimedResult_carriesNoTimeoutMarker() {
+        let json = ActionWire.result(command: "clean", dryRun: true, ran: false,
+                                     exitCode: 0, output: "ok")
+        XCTAssertFalse(json.contains("timed_out"), "additive only — absent unless it happened")
+    }
+
     func testWire_blockedClean_isByteStable() {
         let json = ActionWire.blocked(command: "clean", reason: .agentCleanupsOptInOff)
         XCTAssertEqual(json, #"{"blocked":true,"command":"clean","ran":false,"reason":"Real cleanups are off. Turn on 'Let agents run cleanups for real' in Burrow ▸ Settings, then retry with confirm:true. (A dry-run preview works without it.)"}"#)

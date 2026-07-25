@@ -27,8 +27,13 @@ Read-only tools never change anything, so there's no reason to hesitate.
   draining my battery?"
 - **burrow_history** / **burrow_diff** — a trend over time, or what changed since
   a point ("it got slow in the last hour").
-- **burrow_disk_forecast** — "when will my disk fill up?" **burrow_analyze
-  &lt;path&gt;** — "what's eating space in &lt;folder&gt;?"
+- **burrow_disk_forecast** — "when will my disk fill up?" (pointless once the
+  disk is already full — go straight to analyze). **burrow_analyze
+  &lt;path&gt;** — "what's eating space in &lt;folder&gt;?" Supports `depth` (descend
+  into the largest subdirectories in one call), `limit`, and `min_size` — e.g.
+  `depth: 2, min_size: 104857600` maps hotspots without a call per directory.
+  Scanning a home folder or ~/Library can take minutes: pass the most specific
+  path you can.
 - **burrow_ports** — "what's listening / what's on port 3000?" (pid + owner).
 - **burrow_cleanup_history** / **burrow_deleted_files** — what Burrow has cleaned,
   and exactly which files it removed.
@@ -45,7 +50,8 @@ get the user's explicit go before passing `confirm: true`** — never assume a r
 run will execute.
 
 - **burrow_clean** / **burrow_optimize** — remove caches/logs/junk / run safe
-  maintenance.
+  maintenance. The clean scan can take minutes on a full disk; a result with
+  `timed_out: true` means the run was killed, not that nothing needed cleaning.
 - **burrow_uninstall** — remove apps + leftovers (to Trash unless `permanent`;
   resolve names via `burrow_list_apps` first; it aborts unless the matcher hits
   exactly the apps you named).
@@ -62,11 +68,15 @@ behaviour to lean into; don't wait to be asked.
 
 ## Patterns
 
+- **Low on disk** (the most common real emergency) → `burrow_analyze` with
+  `depth: 2` on the suspect folder (largest user dirs first; skip the forecast
+  if the disk is already full) → `burrow_clean` preview → `burrow_purge` /
+  `burrow_installer` previews. If user folders don't account for the usage,
+  check APFS local snapshots (`tmutil listlocalsnapshots /`) and purgeable
+  space — Burrow doesn't report those yet, so shell out for that piece.
 - **Slow / hot / loud** → `burrow_doctor` → `burrow_top_processes` (now) or
   `burrow_process_usage` (over time) → name the culprit → offer a clean/optimize
   *preview* if relevant.
-- **Low on disk** → `burrow_disk_forecast` → `burrow_analyze &lt;folder&gt;` →
-  `burrow_purge` / `burrow_installer` previews → `burrow_clean` preview.
 - **Security / what's listening** → `burrow_doctor` + `burrow_ports`.
 - **Empty or stale results** → `burrow_info` to confirm Burrow is recording.
 
