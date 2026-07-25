@@ -360,11 +360,14 @@ struct ToolCatalog {
             ],
             [
                 "name": "burrow_analyze",
-                "description": "Disk-usage breakdown of a directory via `mo analyze --json` — a size-ranked tree, the data behind Burrow's treemap. Read-only (no deletion). `path` defaults to the home folder. Use to answer 'what's taking up space?'.",
+                "description": "Disk-usage breakdown of a directory via `mo analyze --json` — size-ranked immediate children (the data behind Burrow's treemap), largest first. Read-only (no deletion). Use to answer 'what's taking up space?'. `depth` > 1 also descends into the largest subdirectories, so one call replaces a per-directory drill-down. SLOW ON BIG TARGETS: a home folder or ~/Library can take minutes to scan — pass the most specific path you can and use `min_size` to skip noise. Truncation is always reported (`entries_omitted`/`omitted_bytes`; `partial: true` means the descent hit its time budget).",
                 "inputSchema": [
                     "type": "object",
                     "properties": [
                         "path": ["type": "string", "description": "Absolute directory to analyze. Defaults to the home folder."],
+                        "depth": ["type": "integer", "minimum": 1, "maximum": 3, "description": "Levels to descend into the largest subdirectories (default 1 = just this directory's children)."],
+                        "limit": ["type": "integer", "minimum": 1, "maximum": 1000, "description": "Max entries per level, largest first (default 100)."],
+                        "min_size": ["type": "integer", "minimum": 0, "description": "Omit entries smaller than this many bytes (default 0). E.g. 104857600 = 100MB."],
                     ],
                     "additionalProperties": false,
                 ] as [String: Any],
@@ -462,7 +465,7 @@ struct ToolCatalog {
             ],
             [
                 "name": "burrow_clean",
-                "description": "Clean caches, logs, temp files and leftovers via `mo clean`. SAFE BY DEFAULT: with no `confirm` (or confirm:false) it runs `--dry-run` and only PREVIEWS what would be freed — nothing is deleted. A real deletion needs confirm:true AND the user's opt-in ('Let agents run cleanups' in Burrow Settings); without the opt-in, confirm:true is refused and reported as blocked. Real runs are not elevated (user-level caches only).",
+                "description": "Clean caches, logs, temp files and leftovers via `mo clean`. SAFE BY DEFAULT: with no `confirm` (or confirm:false) it runs `--dry-run` and only PREVIEWS what would be freed — nothing is deleted. A real deletion needs confirm:true AND the user's opt-in ('Let agents run cleanups' in Burrow Settings); without the opt-in, confirm:true is refused and reported as blocked. Real runs are not elevated (user-level caches only). SLOW: the scan can take minutes on a full disk — a `timed_out: true` result means it was killed, not that there was nothing to clean.",
                 "inputSchema": [
                     "type": "object",
                     "properties": [
@@ -498,7 +501,7 @@ struct ToolCatalog {
             ],
             [
                 "name": "burrow_purge",
-                "description": "Find old project build artifacts (node_modules, target/, build/, …) via `mo purge`. PREVIEW over MCP: this returns the `--dry-run` list of what would be purged. The real purge is an interactive selection flow — run it from the Burrow app. (confirm:true returns the preview plus that note.)",
+                "description": "Find old project build artifacts (node_modules, target/, build/, …) via `mo purge`. PREVIEW over MCP: this returns the `--dry-run` list of what would be purged. The real purge is an interactive selection flow — run it from the Burrow app. (confirm:true returns the preview plus that note.) SLOW: the scan can take several minutes on a disk with many projects.",
                 "inputSchema": [
                     "type": "object",
                     "properties": [
@@ -509,7 +512,7 @@ struct ToolCatalog {
             ],
             [
                 "name": "burrow_installer",
-                "description": "Find leftover installer files (.dmg, .pkg, .iso, .xip, .zip) via `mo installer`. PREVIEW over MCP: returns the `--dry-run` list of what would be removed. The real removal is an interactive selection flow — run it from the Burrow app. (confirm:true returns the preview plus that note.)",
+                "description": "Find leftover installer files (.dmg, .pkg, .iso, .xip, .zip) via `mo installer`. PREVIEW over MCP: returns the `--dry-run` list of what would be removed. The real removal is an interactive selection flow — run it from the Burrow app. (confirm:true returns the preview plus that note.) SLOW: the scan can take several minutes on a large disk.",
                 "inputSchema": [
                     "type": "object",
                     "properties": [
@@ -867,7 +870,7 @@ struct ToolCatalog {
     /// -32603 just because Mole isn't installed.
     static func cleanupHistoryResult(exitCode: Int32, stdout: String) -> String {
         guard exitCode == 0 else {
-            return "{\"error\":\"mo history unavailable\",\"sessions\":[]}"
+            return "{\"error\":\"mo history unavailable\",\"hint\":\"call burrow_info to check whether Burrow is recording data at all\",\"sessions\":[]}"
         }
         let out = stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         return out.isEmpty ? "{\"sessions\":[]}" : out
@@ -977,8 +980,9 @@ struct ToolCatalog {
                 return ActionWire.uninstallAbort(apps: expected, matched: matched, mismatch: mismatch)
             }
         }
+        let timeout = ticket.command.timeout ?? 600
         let res = Self.runMo(ticket.command.args, stdin: ticket.command.stdin,
-                             timeout: ticket.command.timeout ?? 600)
+                             timeout: timeout)
         var permanent: Bool?
         if case .uninstall(_, let p) = ticket.action, ticket.mode == .real { permanent = p }
         return ActionWire.result(command: ticket.action.commandName,
@@ -988,16 +992,32 @@ struct ToolCatalog {
                                  output: res.stdout.isEmpty ? res.stderr : res.stdout,
                                  apps: ticket.action.wireApps,
                                  permanent: permanent,
-                                 note: ticket.note)
+                                 note: ticket.note,
+                                 timedOutAfter: res.timedOut ? timeout : nil)
     }
 
-    /// `mo analyze --json <path>` — read-only disk-usage tree. Passes
-    /// through Mole's JSON. Degrades to an error object when `mo` is
-    /// missing or analysis fails.
+    /// `mo analyze --json <path>` — read-only disk-usage breakdown. Mole
+    /// reports one level (immediate children with aggregate sizes);
+    /// `depth` > 1 re-runs it over the largest subdirectories so an agent
+    /// gets a hotspot map in one call instead of a call-per-directory
+    /// drill-down. Entries are pruned (`limit`, `min_size`) with omissions
+    /// counted — never silently — and re-emitted compact (mole pretty-
+    /// prints; agents were seeing 35–60 KB blobs). Degrades to an error
+    /// object when `mo` is missing, too old, or times out.
     private func callAnalyze(_ args: [String: Any]) -> String {
         let path = (args["path"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? NSHomeDirectory()
+        let depth = min(max((args["depth"] as? Int) ?? 1, 1), 3)
+        let limit = min(max((args["limit"] as? Int) ?? 100, 1), 1000)
+        let minSize = Int64(max((args["min_size"] as? Int) ?? 0, 0))
         // 300 s like DiskScanner — analyze on a home dir can take a while.
         let res = Self.runMo(["analyze", "--json", path], timeout: 300)
+        if res.timedOut {
+            return Self.jsonString([
+                "error": "mo analyze timed out",
+                "timed_out": true,
+                "path": path,
+                "hint": "scanning \(path) took over 300s — analyze a more specific subdirectory instead"])
+        }
         guard res.exitCode == 0 else {
             if DiskScanner.indicatesMissingJSONSupport(stderr: res.stderr) {
                 return Self.jsonString([
@@ -1010,7 +1030,94 @@ struct ToolCatalog {
                                     "stderr": Self.stripANSI(res.stderr)])
         }
         let out = res.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        return out.isEmpty ? Self.jsonString(["error": "empty analyze output", "path": path]) : out
+        guard !out.isEmpty else {
+            return Self.jsonString(["error": "empty analyze output", "path": path])
+        }
+        // If mole's JSON shape ever drifts past the parser, pass it through
+        // untouched — the old contract.
+        guard var root = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] else {
+            return out
+        }
+        root = Self.prunedAnalyzeLevel(root, limit: limit, minSize: minSize)
+        if depth > 1 {
+            // Budget the descent to stay under the ~120 s window MCP
+            // clients wait before backgrounding a call.
+            let deadline = Date().addingTimeInterval(90)
+            if !self.descendAnalyze(into: &root, levelsLeft: depth - 1, limit: limit,
+                                    minSize: minSize, deadline: deadline) {
+                root["partial"] = true
+                root["hint"] = "the depth descent hit its time budget — entries without `children` were not descended into"
+            }
+        }
+        return Self.jsonString(root)
+    }
+
+    /// One pruned analyze level: entries sorted largest-first, filtered by
+    /// `minSize`, cut to `limit`. Drops are tallied on the level as
+    /// `entries_omitted` / `omitted_bytes` so truncation is visible.
+    static func prunedAnalyzeLevel(_ level: [String: Any], limit: Int, minSize: Int64) -> [String: Any] {
+        var out = level
+        let entries = (level["entries"] as? [[String: Any]]) ?? []
+        let sorted = entries.sorted { Self.entrySize($0) > Self.entrySize($1) }
+        var kept: [[String: Any]] = []
+        var omitted = 0
+        var omittedBytes: Int64 = 0
+        for e in sorted {
+            let size = Self.entrySize(e)
+            if kept.count < limit, size >= minSize {
+                kept.append(e)
+            } else {
+                omitted += 1
+                omittedBytes += size
+            }
+        }
+        out["entries"] = kept
+        if omitted > 0 {
+            out["entries_omitted"] = omitted
+            out["omitted_bytes"] = omittedBytes
+        }
+        return out
+    }
+
+    static func entrySize(_ entry: [String: Any]) -> Int64 {
+        (entry["size"] as? Int64) ?? Int64(entry["size"] as? Int ?? 0)
+    }
+
+    /// Re-run `mo analyze` over the largest directory entries of `level`,
+    /// attaching each pruned result under the entry's `children` (with
+    /// `children_omitted` / `children_omitted_bytes` when cut). At most 8
+    /// directories per level — this is a hotspot map, not a mirror.
+    /// Returns false when the deadline cut the descent short.
+    private func descendAnalyze(into level: inout [String: Any], levelsLeft: Int,
+                                limit: Int, minSize: Int64, deadline: Date) -> Bool {
+        guard levelsLeft > 0, var entries = level["entries"] as? [[String: Any]] else { return true }
+        var complete = true
+        var descended = 0
+        for i in entries.indices {
+            guard descended < 8 else { break }
+            guard (entries[i]["is_dir"] as? Bool) == true,
+                  let childPath = entries[i]["path"] as? String, !childPath.isEmpty else { continue }
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 5 else { complete = false; break }
+            descended += 1
+            let res = Self.runMo(["analyze", "--json", childPath], timeout: min(remaining, 60))
+            guard !res.timedOut, res.exitCode == 0,
+                  var child = (try? JSONSerialization.jsonObject(
+                      with: Data(res.stdout.utf8))) as? [String: Any] else {
+                if res.timedOut { complete = false }
+                continue
+            }
+            child = Self.prunedAnalyzeLevel(child, limit: limit, minSize: minSize)
+            if !self.descendAnalyze(into: &child, levelsLeft: levelsLeft - 1, limit: limit,
+                                    minSize: minSize, deadline: deadline) {
+                complete = false
+            }
+            entries[i]["children"] = child["entries"]
+            if let om = child["entries_omitted"] { entries[i]["children_omitted"] = om }
+            if let ob = child["omitted_bytes"] { entries[i]["children_omitted_bytes"] = ob }
+        }
+        level["entries"] = entries
+        return complete
     }
 
     /// `mo uninstall --list` — installed apps + the exact names uninstall

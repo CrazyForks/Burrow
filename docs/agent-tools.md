@@ -51,7 +51,7 @@ samples continuously, and every actuating call is **dry-run by default**.
 
 | Tool | Use it proactively when… | Key params |
 |---|---|---|
-| **burrow_analyze** | "What's taking up space in <folder>?" Size-ranked directory tree (the data behind the treemap). Read-only. | `path` |
+| **burrow_analyze** | "What's taking up space in <folder>?" Size-ranked children of a directory, largest first (the data behind the treemap); `depth` > 1 descends into the largest subdirectories so one call replaces a drill-down loop. Scanning a home folder or `~/Library` can take minutes — pass the most specific path you can, and use `min_size` to skip noise. Truncation is reported via `entries_omitted`/`omitted_bytes`, and `partial: true` means the descent hit its time budget. Read-only. | `path`, `depth`, `limit`, `min_size` |
 | **burrow_list_apps** | Before any uninstall, **always call this first** to get the exact app name `burrow_uninstall` accepts. Also answers "what apps are installed?" | — |
 
 ## Discovery (read-only, via the bundled conductor)
@@ -80,7 +80,7 @@ it. Real cleans run at user level (not elevated).
 
 | Tool | What a real run does | Safety | Key params |
 |---|---|---|---|
-| **burrow_clean** | Removes caches, logs, temp files, leftovers (`mo clean`). | Dry-run unless `confirm:true` **and** "Let agents run cleanups" is on, else blocked. | `confirm` |
+| **burrow_clean** | Removes caches, logs, temp files, leftovers (`mo clean`). The scan can take minutes on a full disk; a `timed_out: true` result means the run was killed, not that nothing needed cleaning. | Dry-run unless `confirm:true` **and** "Let agents run cleanups" is on, else blocked. | `confirm` |
 | **burrow_optimize** | Refreshes caches/services, safe maintenance (`mo optimize`). | Same gate as clean. | `confirm` |
 | **burrow_uninstall** | Uninstalls apps + leftovers (`mo uninstall`). Files go to Trash unless `permanent:true`. | Needs `confirm:true` **and both** opt-ins; aborts unless the matcher resolves exactly the apps you named. Call `burrow_list_apps` first. | `apps` (required), `confirm`, `permanent` |
 | **burrow_purge** | Finds dev build artifacts (`node_modules`, `target/`, …). | **Preview-only over MCP** — returns the dry-run list; the real purge is an interactive flow in the app. | `confirm` (reserved) |
@@ -92,12 +92,16 @@ Every actuating call is recorded to Burrow's audit log, so the user can see what
 
 ## Patterns
 
+- **"I'm low on disk"** (the most common real emergency) → `burrow_analyze <folder>` with
+  `depth: 2` on the largest user dirs (skip `burrow_disk_forecast` when the disk is already
+  full — forecasting is for "when will it fill", not "it's full now") →
+  `burrow_dupes`/`burrow_photos`/`burrow_orphans`/`burrow_sentinel` for reclaim candidates →
+  `burrow_purge`/`burrow_installer` previews → `burrow_clean` preview. If user folders don't
+  account for the usage, check APFS local snapshots (`tmutil listlocalsnapshots /`) and
+  purgeable space via the shell — Burrow doesn't report those yet.
 - **"My Mac is slow/hot/loud"** → `burrow_doctor` → `burrow_top_processes` (now) or
   `burrow_process_usage` (over time) → name the culprit; offer `burrow_clean`/`optimize`
   preview only if relevant.
-- **"I'm low on disk"** → `burrow_disk_forecast` → `burrow_analyze <folder>` →
-  `burrow_dupes`/`burrow_photos`/`burrow_orphans`/`burrow_sentinel` for reclaim candidates →
-  `burrow_purge`/`burrow_installer` previews → `burrow_clean` preview.
 - **"Is anything insecure / what's listening?"** → `burrow_doctor` (SIP/Gatekeeper/FileVault/
   firewall) + `burrow_ports`.
 - **"What did Burrow change?"** → `burrow_cleanup_history` + `burrow_deleted_files`.
