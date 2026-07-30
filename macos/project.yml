@@ -57,6 +57,9 @@ targets:
         CFBundleShortVersionString: "0.10.5"
         CFBundleVersion: "20"
         NSHumanReadableCopyright: "MIT License. Mole CLI © tw93. Independent, not affiliated with mole.fit."
+        # Burrow uses only exempt encryption supplied by macOS (for example,
+        # URLSession HTTPS); it contains no proprietary or non-exempt crypto.
+        ITSAppUsesNonExemptEncryption: false
         # Friendly, one-time prompts for the standard folders Mole scans
         # (purge/installer touch these). Full Disk Access still covers the
         # cache/container locations — see the in-app FDA gate.

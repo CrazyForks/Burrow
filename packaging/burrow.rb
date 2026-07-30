@@ -1,8 +1,9 @@
 # Homebrew cask for Burrow.
 #
-# This is a template for a tap (e.g. caezium/homebrew-tap). After a GitHub
-# release, set `version` + `sha256` (scripts/release.sh prints both), copy
-# this to `Casks/burrow.rb` in the tap, and users install with:
+# Legacy reference for the unsigned 0.4.0 cask. Do not copy this file into the
+# live tap after a release: the fail-closed tag workflow updates
+# caezium/homebrew-tap only after verifying the signed, notarized artifact.
+# Users install the live cask with:
 #
 #   brew install --cask caezium/tap/burrow
 #

@@ -338,7 +338,7 @@
     </div>
     <button class="hero-cmd" id="brewcmd" type="button" aria-label="Copy install command">
       <span class="dollar">$</span><span class="txt">brew install --cask caezium/tap/burrow</span>
-      <span class="hint">click to copy · pulls in <span class="cmd">mole</span> &amp; clears quarantine</span>
+      <span class="hint">click to copy · signed + notarized release gate</span>
     </button>
   </header>
 
@@ -500,24 +500,20 @@
       <a class="btn btn-fill" href="https://github.com/caezium/Burrow/releases/latest" target="_blank" rel="noopener" style="padding:15px 40px; font-size:16px;">Get Burrow</a>
       <div class="price-lines">All five tools, the menu-bar HUD, history, and the MCP server included.<br>
         <span style="color:var(--ink-3)">or <a class="u" href="#build">build it from source</a></span></div>
-      <div class="price-meta">unlimited Macs<span class="dot">·</span>no account<span class="dot">·</span>unsigned, pre-1.0<span class="dot">·</span>engine + conductor bundled — nothing else to install</div>
+      <div class="price-meta">unlimited Macs<span class="dot">·</span>no account<span class="dot">·</span>Developer ID release gate<span class="dot">·</span>engine + conductor bundled — nothing else to install</div>
     </div>
 
     <div class="installs" id="build">
       <div class="inst">
         <h3>Homebrew <span class="ptag">recommended</span></h3>
-        <p>Installs the required engine, then the app, and clears quarantine.</p>
-        <div class="code" data-copy="brew install mole
-brew install --cask caezium/tap/burrow"><button class="copy">copy</button><span class="c"># engine, then app</span>
-brew install mole
+        <p>Installs the latest app with its bundled engine. Version 0.10.5 and earlier used a legacy quarantine bypass; later tags must be signed and notarized.</p>
+        <div class="code" data-copy="brew install --cask caezium/tap/burrow"><button class="copy">copy</button><span class="c"># app + bundled engine</span>
 brew install --cask caezium/tap/burrow</div>
       </div>
       <div class="inst">
         <h3>Direct download</h3>
-        <p>Unzip into <code class="k">/Applications</code>, then clear the Gatekeeper quarantine.</p>
-        <div class="code" data-copy="xattr -cr /Applications/Burrow.app
-open /Applications/Burrow.app"><button class="copy">copy</button>xattr -cr /Applications/Burrow.app
-open  /Applications/Burrow.app</div>
+        <p>Unzip into <code class="k">/Applications</code> and keep quarantine intact so Gatekeeper can verify the notarization ticket. For archived 0.10.5-or-earlier builds, right-click and choose <b>Open</b>.</p>
+        <div class="code" data-copy="open /Applications/Burrow.app"><button class="copy">copy</button>open /Applications/Burrow.app</div>
       </div>
       <div class="inst">
         <h3>Build from source</h3>
@@ -546,7 +542,7 @@ cd Burrow/macos && xcodegen generate</div>
       <details class="qa"><summary>Does Burrow run on Windows?</summary>
         <div class="a">It's getting there — a native <b>WinUI 3 / .NET 8</b> port is in active <b>beta</b>, reaching parity with the Mac app tool-by-tool (Clean, Purge, Installers, Optimize, Software, Analyze, Status, History, and the MCP server). macOS is the mature flagship; Windows is build-from-source for now (an installer is coming), under <code class="k">windows/</code> in the repo. Track it on <a class="u" href="https://github.com/caezium/Burrow/tree/main/windows" target="_blank" rel="noopener">GitHub</a>.</div></details>
       <details class="qa"><summary>Is it signed and notarized?</summary>
-        <div class="a">Not yet — Burrow is unsigned and pre-1.0. Every install path clears the Gatekeeper quarantine for you (<code class="k">xattr -cr</code> or the Homebrew cask). The honest trade-offs are in <a class="u" href="https://github.com/caezium/Burrow/blob/main/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>.</div></details>
+        <div class="a">New official tags cannot publish unless Developer ID signing, Apple notarization, ticket stapling, and Gatekeeper assessment all succeed. Version 0.10.5 and earlier predate that gate and remain unsigned; right-click those archived builds and choose <b>Open</b>. The full release contract is in <a class="u" href="https://github.com/caezium/Burrow/blob/main/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>.</div></details>
       <details class="qa"><summary>Does it work without Full Disk Access? Does it upload anything?</summary>
         <div class="a">Yes — Burrow runs a safe scan by default; Full Disk Access lets it reach deeper App Support and container caches, and you can grant or skip it anytime. Scans and cleanup run locally and history is a local file — none of that is uploaded. What does leave, unless you turn it off in Settings, is anonymous usage &amp; crash telemetry: bucketed events with no files, paths or metrics, listed one by one in <a class="u" href="https://github.com/caezium/Burrow/blob/main/TELEMETRY.md" target="_blank" rel="noopener">TELEMETRY.md</a>. Source builds ship with it inert.</div></details>
       <details class="qa"><summary>What's the MCP server for?</summary>

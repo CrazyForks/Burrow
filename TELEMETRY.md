@@ -16,6 +16,13 @@ is the detail.
 Client code: [`Sources/Telemetry.swift`](Sources/Telemetry.swift) (PostHog) and
 [`Sources/CrashReporter.swift`](Sources/CrashReporter.swift) (Sentry).
 
+The shipping
+[`PrivacyInfo.xcprivacy`](macos/Resources/PrivacyInfo.xcprivacy) declares
+Product Interaction and Other Usage Data for analytics, plus Crash,
+Performance, and Other Diagnostic Data for app functionality. Every category
+is unlinked and non-tracking. The manifest changes no collection behavior; it
+describes the opt-out behavior enforced below.
+
 Unlike PostHog's fixed host, Sentry has no separate host setting — the ingest
 endpoint is encoded in the **DSN injected at release time**. For official
 builds that's the maintainer's Sentry project; a fork built with its own DSN
@@ -66,6 +73,7 @@ IP is attached to events either.
 | `app_opened` | `cold_start: bool` | `Telemetry.start()` |
 | `app_terminated` | — | `AppDelegate.applicationWillTerminate` |
 | `engine_missing` | — (launched without the `mo` CLI; an activation signal) | `AppDelegate` |
+| `onboarding_completed` | — | `AppDelegate` |
 | `telemetry_opt_in_changed` | `enabled: bool` | `Telemetry.setEnabled` |
 
 Plus whatever crashes/unhandled errors Sentry captures automatically (no

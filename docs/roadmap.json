@@ -1,23 +1,24 @@
 {
   "_comment": "Source of truth for the site roadmap (docs/roadmap.html) and the README '## Roadmap' block. Edit this, then run `python3 scripts/site-release.py`. Columns render top to bottom; empty columns are skipped. Item fields: title (req), type (feat|fix|infra), issue (GitHub #, links to vote), note, version (for shipped — links to the changelog). Voting happens on GitHub issues (upvote) — keep this curated and honest; it's a guide, not a promise.",
-  "updated": "2026-06-30",
+  "updated": "2026-07-31",
   "columns": [
     {
       "key": "building",
       "title": "Building",
       "blurb": "In progress now.",
-      "items": []
+      "items": [
+        {
+          "title": "Signed & notarized macOS builds",
+          "type": "infra",
+          "note": "The fail-closed pipeline is ready; the first Developer ID release awaits Apple credentials and end-to-end verification."
+        }
+      ]
     },
     {
       "key": "planned",
       "title": "Planned",
       "blurb": "Decided — not started yet.",
       "items": [
-        {
-          "title": "Signed & notarized macOS builds",
-          "type": "infra",
-          "note": "A Developer ID signature so Gatekeeper trusts Burrow without the right-click → Open dance."
-        },
         {
           "title": "In-app auto-update",
           "type": "feat",
