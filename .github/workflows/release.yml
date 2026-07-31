@@ -4,21 +4,21 @@ name: release
 #
 #   git tag v0.5.0 && git push origin v0.5.0
 #
-# This builds a Release app, code-signs + notarizes it (when the signing
-# secrets are configured — otherwise it ships unsigned, as today),
-# publishes a GitHub release with the zip, and bumps the Homebrew cask in
-# caezium/homebrew-tap so `brew upgrade --cask caezium/tap/burrow` picks it
-# up. Pushing ordinary commits to main does NOT touch the tap — only a tag.
+# This builds a Release app, code-signs every executable with Developer ID,
+# notarizes + staples it, publishes a GitHub release with the zip, and bumps
+# the Homebrew cask in caezium/homebrew-tap so `brew upgrade --cask
+# caezium/tap/burrow` picks it up. Pushing ordinary commits to main does NOT
+# touch the tap — only a tag. Releases fail closed when any signing or
+# notarization credential is absent.
 #
-# Optional secrets for a signed + notarized build:
+# Required secrets:
 #   MACOS_CERT_P12        base64 of a "Developer ID Application" .p12
 #   MACOS_CERT_PASSWORD   password for that .p12
 #   MACOS_SIGN_IDENTITY   e.g. "Developer ID Application: Name (TEAMID)"
 #   AC_API_KEY_ID         App Store Connect API key id
 #   AC_API_ISSUER_ID      App Store Connect issuer id
 #   AC_API_KEY_P8         base64 of the AuthKey_XXXX.p8
-# Without the cert secrets the build is unsigned (current behaviour); with
-# the cert but no AC_* keys it's signed but not notarized.
+#   TAP_PAT               fine-grained token for caezium/homebrew-tap
 #
 # Optional telemetry secrets — release.sh reads these from the environment
 # (locally it sources the gitignored scripts/release.env instead). Without
@@ -44,12 +44,44 @@ concurrency:
 jobs:
   release:
     runs-on: macos-15
-    timeout-minutes: 40
+    # The build is capped at 38 minutes and Apple's synchronous notarization
+    # wait at 30 minutes, so the job cap must leave room for both plus packaging.
+    timeout-minutes: 75
     steps:
       # Pinned to a commit SHA, not a floating tag: this job holds
       # contents:write, the signing cert, and TAP_PAT, so a moved tag must
       # not be able to run new code here. Comment keeps the version legible.
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Require release credentials
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          AC_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+          AC_KEY_P8: ${{ secrets.AC_API_KEY_P8 }}
+          TAP_TOKEN: ${{ secrets.TAP_PAT }}
+        run: |
+          missing=()
+          [ -n "$CERT_P12" ] || missing+=(MACOS_CERT_P12)
+          [ -n "$CERT_PASSWORD" ] || missing+=(MACOS_CERT_PASSWORD)
+          [ -n "$SIGN_IDENTITY" ] || missing+=(MACOS_SIGN_IDENTITY)
+          [ -n "$AC_KEY_ID" ] || missing+=(AC_API_KEY_ID)
+          [ -n "$AC_ISSUER_ID" ] || missing+=(AC_API_ISSUER_ID)
+          [ -n "$AC_KEY_P8" ] || missing+=(AC_API_KEY_P8)
+          [ -n "$TAP_TOKEN" ] || missing+=(TAP_PAT)
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Release blocked: missing required secret(s): ${missing[*]}"
+            exit 1
+          fi
+          case "$SIGN_IDENTITY" in
+            "Developer ID Application:"*) ;;
+            *)
+              echo "::error::MACOS_SIGN_IDENTITY must name a Developer ID Application certificate."
+              exit 1
+              ;;
+          esac
 
       # Fetch the bundled MIT engine OUTSIDE the work tree (RUNNER_TEMP), at its
       # pinned submodule commit. (This once looked like it hung SPM — the real
@@ -208,118 +240,67 @@ jobs:
           # source files are ever shipped to Sentry.
           sentry-cli debug-files upload "$DSYM"
 
-      - name: Code-sign (Developer ID) — skipped if no cert
-        id: sign
+      - name: Code-sign every executable (Developer ID)
         env:
           CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
           SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
         run: |
           APP="${{ steps.build.outputs.app }}"
-          if [ -z "$CERT_P12" ] || [ -z "$SIGN_IDENTITY" ]; then
-            # No Developer ID cert: re-sign AD-HOC rather than ship whatever
-            # xcodebuild left behind. Its SPM frameworks carry a CodeResources
-            # manifest that doesn't match the embedded bundle, so
-            # `codesign --verify --strict` fails ("code has no resources but
-            # signature indicates they must be present" on Sentry.framework) —
-            # macOS then can't validate the app's identity, so a Full Disk
-            # Access grant is never honoured (#177). An inside-out ad-hoc
-            # re-sign regenerates each framework's CodeResources and gives the
-            # app one coherent, strictly-valid identity, so TCC can validate it
-            # and FDA holds within a version. (A stable identity ACROSS updates
-            # still needs a Developer ID — set the MACOS_CERT_* secrets.)
-            echo "::warning::No Developer ID cert — re-signing AD-HOC (valid, but a per-build identity: FDA must be re-granted after each update until a cert is configured)."
-            if [ -d "$APP/Contents/Frameworks" ]; then
-              find "$APP/Contents/Frameworks" \( -name "*.framework" -o -name "*.dylib" \) -print0 \
-                | while IFS= read -r -d '' f; do codesign --force --sign - "$f"; done
-            fi
-            # The bundled MIT engine ships nested Mach-O helpers (status-go,
-            # analyze-go). Re-sign them with the app's ad-hoc identity too, so
-            # the whole bundle carries one coherent signature — the same
-            # inside-out pass we do for frameworks. (bundle-engine.sh ad-hoc
-            # signs them at build time, but best-effort/`|| true`; this makes it
-            # authoritative and is what the Developer ID path below relies on.)
-            # Filter by Mach-O magic so the shell entrypoint + lib/*.sh skip.
-            if [ -d "$APP/Contents/Resources/engine" ]; then
-              find "$APP/Contents/Resources/engine" -type f -print0 \
-                | while IFS= read -r -d '' f; do
-                    if file -b "$f" | grep -q 'Mach-O'; then codesign --force --sign - "$f"; fi
-                  done
-            fi
-            # The FSL `burrow` conductor (Resources/burrow) is a sibling nested Mach-O —
-            # re-sign it inside-out too, or the app's resource seal goes stale (#177).
-            if [ -f "$APP/Contents/Resources/burrow" ]; then codesign --force --sign - "$APP/Contents/Resources/burrow"; fi
-            codesign --force --sign - --entitlements macos/Resources/Burrow.entitlements "$APP"
-            codesign --verify --strict --verbose=2 "$APP"
-            echo "signed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
           KPW="$(uuidgen)"
+          cleanup_signing_keychain() {
+            rm -f "$RUNNER_TEMP/cert.p12"
+            security delete-keychain "$KEYCHAIN" >/dev/null 2>&1 || true
+          }
+          trap cleanup_signing_keychain EXIT
           echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
           security create-keychain -p "$KPW" "$KEYCHAIN"
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
           security unlock-keychain -p "$KPW" "$KEYCHAIN"
           security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KPW" "$KEYCHAIN" >/dev/null
-          # Put our keychain first in the search list so codesign finds the identity.
-          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed s/\"//g)
           rm -f "$RUNNER_TEMP/cert.p12"
-          # Sign nested code inside-out FIRST. Notarization requires every
-          # embedded Mach-O (the Sentry + PostHog frameworks, any bundled
-          # dylibs) to carry Developer ID + hardened runtime + secure
-          # timestamp; signing only the outer bundle leaves them ad-hoc /
-          # linker-signed and the submission is rejected.
-          if [ -d "$APP/Contents/Frameworks" ]; then
-            find "$APP/Contents/Frameworks" \( -name "*.framework" -o -name "*.dylib" \) -print0 \
-              | while IFS= read -r -d '' f; do
-                  codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$f"
-                done
-          fi
-          # The bundled engine's nested Mach-O helpers (status-go, analyze-go)
-          # need Developer ID + hardened runtime + secure timestamp too — every
-          # embedded Mach-O must be signed this way or notarization rejects the
-          # submission. (Mach-O filter skips the shell entrypoint + lib/*.sh.)
-          if [ -d "$APP/Contents/Resources/engine" ]; then
-            find "$APP/Contents/Resources/engine" -type f -print0 \
-              | while IFS= read -r -d '' f; do
-                  if file -b "$f" | grep -q 'Mach-O'; then
-                    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$f"
-                  fi
-                done
-          fi
-          # The FSL `burrow` conductor (Resources/burrow) is a sibling nested Mach-O — it
-          # needs Developer ID + hardened runtime + secure timestamp too, or notarization rejects.
-          if [ -f "$APP/Contents/Resources/burrow" ]; then
-            codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP/Contents/Resources/burrow"
-          fi
-          # Hardened runtime + secure timestamp are required for notarization.
-          codesign --force --options runtime --timestamp \
-            --entitlements macos/Resources/Burrow.entitlements \
-            --sign "$SIGN_IDENTITY" "$APP"
-          codesign --verify --strict --verbose=2 "$APP"
-          echo "signed=true" >> "$GITHUB_OUTPUT"
+          security find-identity -v -p codesigning "$KEYCHAIN" | grep -F "\"$SIGN_IDENTITY\"" \
+            || { echo "::error::Imported keychain does not contain $SIGN_IDENTITY"; exit 1; }
+          CODESIGN_KEYCHAIN="$KEYCHAIN" bash scripts/sign-macos-app.sh \
+            "$APP" "$SIGN_IDENTITY" developer-id macos/Resources/Burrow.entitlements
+          codesign -d --verbose=4 "$APP" 2>&1 \
+            | grep -E '^(Authority=Developer ID Application:|TeamIdentifier=|Timestamp=|Runtime Version=)'
 
-      - name: Notarize + staple — skipped if no API key
-        if: steps.sign.outputs.signed == 'true'
+      - name: Notarize + staple + Gatekeeper assessment
         env:
           AC_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
           AC_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
           AC_KEY_P8: ${{ secrets.AC_API_KEY_P8 }}
         run: |
           APP="${{ steps.build.outputs.app }}"
-          if [ -z "$AC_KEY_P8" ] || [ -z "$AC_KEY_ID" ] || [ -z "$AC_ISSUER_ID" ]; then
-            echo "::warning::Signed but no notarization key (AC_API_*) — Gatekeeper may still warn on first launch."
-            exit 0
-          fi
+          trap 'rm -f "$RUNNER_TEMP/ac_key.p8"' EXIT
           echo "$AC_KEY_P8" | base64 --decode > "$RUNNER_TEMP/ac_key.p8"
           ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/notarize.zip"
+          set +e
           xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
             --key "$RUNNER_TEMP/ac_key.p8" --key-id "$AC_KEY_ID" --issuer "$AC_ISSUER_ID" \
-            --wait --timeout 30m
+            --wait --timeout 30m --output-format json > "$RUNNER_TEMP/notary-result.json"
+          NOTARY_EXIT=$?
+          set -e
+          cat "$RUNNER_TEMP/notary-result.json"
+          SUBMISSION_ID="$(jq -r '.id // empty' "$RUNNER_TEMP/notary-result.json")"
+          STATUS="$(jq -r '.status // empty' "$RUNNER_TEMP/notary-result.json")"
+          if [ "$NOTARY_EXIT" -ne 0 ] || [ "$STATUS" != "Accepted" ]; then
+            if [ -n "$SUBMISSION_ID" ]; then
+              xcrun notarytool log "$SUBMISSION_ID" \
+                --key "$RUNNER_TEMP/ac_key.p8" --key-id "$AC_KEY_ID" --issuer "$AC_ISSUER_ID" \
+                "$RUNNER_TEMP/notary-log.json" || true
+              [ -f "$RUNNER_TEMP/notary-log.json" ] && cat "$RUNNER_TEMP/notary-log.json"
+            fi
+            echo "::error::Notarization failed (status=${STATUS:-unknown}, submission=${SUBMISSION_ID:-unknown})."
+            exit 1
+          fi
           xcrun stapler staple "$APP"
           xcrun stapler validate "$APP"
-          rm -f "$RUNNER_TEMP/ac_key.p8"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          spctl --assess --type execute --verbose=4 "$APP"
 
       - name: Package (zip + sha256)
         id: pkg
@@ -333,7 +314,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
           SHA=$(shasum -a 256 "$ZIP" | awk '{print $1}')
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "Built Burrow ${{ steps.build.outputs.version }} (signed=${{ steps.sign.outputs.signed }}) sha256=$SHA"
+          echo "Built Burrow ${{ steps.build.outputs.version }} (Developer ID signed + notarized) sha256=$SHA"
 
       - name: Publish GitHub release (idempotent)
         env:
@@ -357,24 +338,76 @@ jobs:
           # Add it under Settings ▸ Secrets and variables ▸ Actions ▸ TAP_PAT.
           GH_TOKEN: ${{ secrets.TAP_PAT }}
         run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::warning::TAP_PAT secret is not set — the GitHub release IS published, but the Homebrew cask was NOT bumped. Add the secret to automate it, or bump Casks/burrow.rb by hand. Not failing the release for this."
-            exit 0
-          fi
           VERSION="${{ steps.build.outputs.version }}"
           SHA="${{ steps.pkg.outputs.sha }}"
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/caezium/homebrew-tap.git" tap
+          gh auth setup-git
+          git clone "https://github.com/caezium/homebrew-tap.git" tap
           CASK="tap/Casks/burrow.rb"
           /usr/bin/sed -i '' -E \
             -e "s/version \"[^\"]+\"/version \"${VERSION}\"/" \
             -e "s/sha256 \"[^\"]+\"/sha256 \"${SHA}\"/" \
             "$CASK"
+          # This step only runs after Developer ID signing, accepted
+          # notarization, stapling, and Gatekeeper assessment. Remove the
+          # legacy quarantine bypass now that preserving quarantine is what
+          # lets Gatekeeper validate the notarization ticket.
+          ruby <<'RUBY'
+          cask_path = "tap/Casks/burrow.rb"
+          cask = File.read(cask_path)
+          legacy = <<'LEGACY'
+            # Pre-1.0 builds aren't notarized yet, so clear the quarantine flag to
+            # avoid a Gatekeeper block on first launch. Remove this once the app
+            # ships signed + notarized.
+            postflight do
+              system_command "/usr/bin/xattr", args: ["-cr", "#{appdir}/Burrow.app"], sudo: false
+            end
+
+            caveats <<~EOS
+              Burrow is an unsigned pre-1.0 build. If macOS still blocks it, right-click
+              the app and choose Open, or run:  xattr -cr "#{appdir}/Burrow.app"
+            EOS
+
+          LEGACY
+          if cask.include?(legacy)
+            File.write(cask_path, cask.sub(legacy, ""))
+          elsif cask.match?(/xattr.*-cr|Burrow is an unsigned pre-1\.0 build/)
+            abort "Burrow cask security block has drifted; remove it deliberately"
+          end
+
+          path = "tap/README.md"
+          text = File.read(path)
+          old = <<~'OLD'
+            - These are currently self-signed pre-1.0 builds (not yet notarized), so the
+              casks clear the Gatekeeper quarantine flag automatically on install. If macOS
+              still blocks an app, right-click it and choose **Open**.
+          OLD
+          replacement = <<~'NEW'
+            - Burrow's current cask is Developer ID signed and notarized. It preserves
+              quarantine so Gatekeeper can validate Apple's notarization ticket.
+            - Wisp and Nib are currently self-signed pre-1.0 builds, so their casks clear
+              quarantine automatically. If macOS still blocks either app, right-click it
+              and choose **Open**.
+          NEW
+          if text.include?(old)
+            File.write(path, text.sub(old, replacement))
+          elsif !text.include?("Burrow's current cask is Developer ID signed and notarized")
+            abort "tap README security note has drifted; update it deliberately"
+          end
+          RUBY
           # Guard against a silent no-op: if the cask's format ever drifts so
           # the sed matches nothing, the version/sha won't be present and the
           # `git diff --quiet` below would otherwise report success while the
           # tap stays stale. Fail loudly instead.
           if ! grep -q "version \"${VERSION}\"" "$CASK" || ! grep -q "sha256 \"${SHA}\"" "$CASK"; then
             echo "::error::cask edit didn't take — $CASK is missing version \"${VERSION}\" or the new sha256 after sed. Its format may have drifted; bump it by hand."
+            exit 1
+          fi
+          if grep -qE 'xattr.*-cr|unsigned pre-1\.0' "$CASK"; then
+            echo "::error::legacy Gatekeeper-bypass text remains in $CASK after notarization."
+            exit 1
+          fi
+          if grep -qF 'These are currently self-signed pre-1.0 builds' tap/README.md; then
+            echo "::error::tap README still claims Burrow is unsigned after notarization."
             exit 1
           fi
           cd tap

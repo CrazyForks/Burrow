@@ -1,22 +1,28 @@
 # Security & trust
 
 Burrow is a GUI that drives the [`mo` (Mole)](https://github.com/tw93/Mole)
-CLI. It is pre-1.0 and **not yet code-signed** — this page is the honest
-account of what it does, what touches the network, and how it handles
-admin rights, so you can decide before you run it. The actual
-cleaning/scanning is done by `mo` (MIT, © tw93); audit that too.
+CLI. New official releases must pass Developer ID signing and Apple
+notarization before they can publish. This page is the honest account of what
+the app does, what touches the network, and how it handles admin rights, so you
+can decide before you run it. The actual cleaning/scanning is done by `mo`
+(MIT, © tw93); audit that too.
 
 ## Code signing
 
-Burrow is currently **unsigned and un-notarized**. Code signing is a real
-security mechanism (a cryptographic identity macOS can rely on), not a
-formality — a signed/notarized build is on the roadmap. Until then:
+The tag-release workflow fails closed unless it can sign the app and every
+bundled executable with a **Developer ID Application** certificate, enable the
+hardened runtime, obtain secure timestamps, receive an accepted notarization
+result, staple the ticket, and pass Gatekeeper assessment. After that verified
+artifact is published, the workflow updates the external Homebrew cask and
+removes its legacy quarantine bypass so Gatekeeper can verify the stapled
+ticket. Maintainer setup and first-release verification are in the [macOS
+signing runbook](docs/macos-signing.md).
 
-- Install via the Homebrew cask (it strips the quarantine flag for you), or
-- after copying the app, run `xattr -cr /Applications/Burrow.app`.
-
-If you're not comfortable running an unsigned app that can ask for admin
-rights, **wait for the signed release** or build it yourself from source.
+Burrow 0.10.5 and earlier predate this release gate, remain unsigned, and their
+Homebrew casks used a quarantine bypass. Locally built copies use an ad-hoc
+signature so macOS can bind Full Disk Access to a coherent development
+identity, but that is not a substitute for Developer ID or notarization and
+changes between builds.
 
 ## Privileged (admin) operations — no background helper
 

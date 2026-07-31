@@ -18,6 +18,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  compliance:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Install Greenlight
+        run: brew install revylai/tap/greenlight
+      - name: App distribution preflight
+        run: greenlight preflight macos --exit-code
+
   test:
     runs-on: macos-15
     timeout-minutes: 30

@@ -31,7 +31,7 @@ enum Connectivity {
 
     /// Apple's captive-portal probe endpoint. A clean network returns 200 with a
     /// tiny body containing "Success"; a portal intercepts with anything else.
-    static let probeURL = URL(string: "http://captive.apple.com/hotspot-detect.html")!
+    static let probeURL = URL(string: "http://captive.apple.com/hotspot-detect.html")! // greenlight:ignore http-not-https
 
     // MARK: - Pure classifiers (unit-tested)
 
@@ -59,8 +59,8 @@ enum Connectivity {
     }
 
     private static let knownPublicDNS: Set<String> = [
-        "1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112",
-        "208.67.222.222", "208.67.220.220", "94.140.14.14", "76.76.2.0",
+        "1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112", // greenlight:ignore hardcoded-ipv4
+        "208.67.222.222", "208.67.220.220", "94.140.14.14", "76.76.2.0", // greenlight:ignore hardcoded-ipv4
     ]
 
     /// Whether the active resolvers include a well-known public DNS — the
