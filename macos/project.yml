@@ -54,8 +54,8 @@ targets:
       properties:
         LSUIElement: true   # menu-bar agent, no Dock icon
         CFBundleDisplayName: Burrow
-        CFBundleShortVersionString: "0.10.5"
-        CFBundleVersion: "20"
+        CFBundleShortVersionString: "0.11.0"
+        CFBundleVersion: "21"
         NSHumanReadableCopyright: "MIT License. Mole CLI © tw93. Independent, not affiliated with mole.fit."
         # Burrow uses only exempt encryption supplied by macOS (for example,
         # URLSession HTTPS); it contains no proprietary or non-exempt crypto.

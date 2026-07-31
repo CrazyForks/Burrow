@@ -323,7 +323,7 @@
 
   <!-- ===== HERO ===== -->
   <header class="hero">
-    <span class="brandline">Open source · <b>github.com/caezium/Burrow</b> · v0.10.5</span>
+    <span class="brandline">Open source · <b>github.com/caezium/Burrow</b> · v0.11.0</span>
     <h1>Burrow
       <svg class="mark" viewBox="0 0 100 100" aria-hidden="true"><path d="M14 74 a36 36 0 0 1 72 0 Z" fill="#F3ECDD"/><rect x="38" y="74" width="24" height="7" rx="3.5" fill="#121217"/></svg>
     </h1>
@@ -389,29 +389,30 @@
     <div class="sec-head wn-head">
       <div>
         <span class="sec-num">What's new · July 2026</span>
-        <h2 class="sec-title">New in 0.10.5</h2>
+        <h2 class="sec-title">New in 0.11.0</h2>
       </div>
       <a class="btn btn-out btn-sm" href="releases.html">All releases</a>
     </div>
 
     <div class="grid3 wn-grid">
-      <article class="tcard" style="--c: var(--lilac)">
-        <div class="top"><div class="ico"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg></div><div class="nm">One analyze call, whole hotspot map</div></div>
-        <p class="ds">burrow_analyze gains depth, limit, and min_size — it descends into the largest subdirectories itself, emits compact JSON instead of 35–60 KB blobs, and always reports what it pruned.</p>
+      <article class="tcard" style="--c: var(--teal)">
+        <div class="top"><div class="ico"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M9.5 11.5l2 2 3.5-3.5"/></svg></div><div class="nm">Trusted by Gatekeeper</div></div>
+        <p class="ds">The app and every bundled executable carry a Developer ID signature, hardened runtime, secure timestamp, and stapled Apple notarization ticket.</p>
       </article>
       <article class="tcard" style="--c: var(--azure)">
-        <div class="top"><div class="ico"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div><div class="nm">Timeouts say so</div></div>
-        <p class="ds">A killed clean used to render as exit_code 9 with empty output. Timed-out actions now return timed_out: true plus a hint an agent can act on.</p>
+        <div class="top"><div class="ico"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3l1 1-2 2M16 8l2 2"/></svg></div><div class="nm">One stable identity</div></div>
+        <p class="ds">Full Disk Access can survive normal updates after the one-time transition from an older ad-hoc build to Burrow's stable Developer ID identity.</p>
       </article>
-      <article class="tcard" style="--c: var(--apricot)">
-        <div class="top"><div class="ico"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg></div><div class="nm">Honest slow-tool docs</div></div>
-        <p class="ds">The tools that scan for minutes now say so, and the agent docs + skill lead with the low-disk emergency playbook — the pattern that actually fires in practice.</p>
+      <article class="tcard" style="--c: var(--lilac)">
+        <div class="top"><div class="ico"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 9.5A8 8 0 0120 12"/><path d="M7 12a5 5 0 0110 0c0 3-1 6-2.5 8"/><path d="M12 12c0 3-.6 5.5-1.8 7.6"/></svg></div><div class="nm">Privacy, declared accurately</div></div>
+        <p class="ds">The privacy manifest describes the existing opt-out analytics and diagnostics as unlinked and non-tracking; signing adds no telemetry.</p>
       </article>
     </div>
 
-    <div class="extra-label mono">// also tightened in 0.10.5</div>
+    <div class="extra-label mono">// also tightened in 0.11.0</div>
     <div class="wn-chips">
-      <span class="wn-chip"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>Still ad-hoc-signed — re-grant Full Disk Access once after updating.</span>
+      <span class="wn-chip"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>Upgrading from 0.10.5 or earlier may require one final Full Disk Access grant as Burrow moves from an ad-hoc identity to Developer ID.</span>
+      <span class="wn-chip"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>Homebrew removes the legacy quarantine bypass only after Apple's notarization and Gatekeeper verification succeed.</span>
     </div>
     <!-- WN:END -->
   </section>
