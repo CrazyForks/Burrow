@@ -487,7 +487,7 @@
       <div class="pr"><div class="n">4</div><div><div class="lead">Free, open, no upsell.</div>
         <p>Five tools plus the HUD, history and the MCP server — all of it, <b>MIT-licensed</b>. Every line is on GitHub. No trial limits, no accounts, no trade.</p></div></div>
       <div class="pr"><div class="n">5</div><div><div class="lead">Built on an audited engine.</div>
-        <p>Burrow bundles nothing from <span class="cmd">mo</span> — it drives the same binary you can read and run yourself. The honest trade-offs, including the admin path, are in <a href="https://github.com/caezium/Burrow/blob/main/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>.</p></div></div>
+        <p>Burrow carries its own MIT-licensed engine, forked from <span class="cmd">mo</span> and pinned with the app, so every install runs the version we built and reviewed. The honest trade-offs, including the admin path, are in <a href="https://github.com/caezium/Burrow/blob/main/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>.</p></div></div>
     </div>
   </section>
 
@@ -517,7 +517,7 @@ brew install --cask caezium/tap/burrow</div>
       </div>
       <div class="inst">
         <h3>Build from source</h3>
-        <p>Needs <code class="k">xcodegen</code> + <code class="k">mole</code>. Every line is yours to read first.</p>
+        <p>Needs <code class="k">xcodegen</code> plus the repository submodules; the build stages the engine into the app. Every line is yours to read first.</p>
         <div class="code" data-copy="git clone https://github.com/caezium/Burrow.git
 cd Burrow/macos && xcodegen generate"><button class="copy">copy</button>git clone …/caezium/Burrow.git
 cd Burrow/macos && xcodegen generate</div>
@@ -536,9 +536,9 @@ cd Burrow/macos && xcodegen generate</div>
       <details class="qa"><summary>How is Burrow different from the <code class="k">mo</code> CLI?</summary>
         <div class="a"><code class="k">mo</code> is the free, open-source terminal engine that does the real work. Burrow is the native Mac GUI around it — disk maps, a status dashboard, the menu-bar HUD, multi-select uninstall, one-click workflows — plus two things the CLI doesn't have: a long-range metric history and an MCP server for agents.</div></details>
       <details class="qa"><summary>Is it really free?</summary>
-        <div class="a">Yes — free and MIT-licensed, with no accounts, ads or upsells. If you'd rather have a polished, signed, supported app and want to fund the <code class="k">mo</code> engine, <a class="u" href="https://mole.fit/" target="_blank" rel="noopener">mole.fit</a> is $19 and worth it. Burrow is the open-source alternative for people who want the source and the agent hooks.</div></details>
-      <details class="qa"><summary>Why does it need the Mole CLI?</summary>
-        <div class="a">Burrow doesn't reimplement cleaning or analysis — it drives the audited <code class="k">mo</code> binary and bundles nothing from it. That keeps Burrow thin and means the dangerous work runs through a tool you can audit independently. <code class="k">brew install mole</code> first, or Burrow refuses to launch.</div></details>
+        <div class="a">Yes — free and MIT-licensed, with no accounts, ads or upsells. If you'd rather buy direct commercial support and want to fund the <code class="k">mo</code> engine, <a class="u" href="https://mole.fit/" target="_blank" rel="noopener">mole.fit</a> is $19 and worth it. Burrow is the open-source alternative for people who want the source and the agent hooks.</div></details>
+      <details class="qa"><summary>Does it need a separate cleaning engine?</summary>
+        <div class="a">No. Burrow bundles its own MIT-licensed engine, forked from the open-source <code class="k">mo</code> codebase and pinned to the app release, so Homebrew and direct-download installs work without a separate CLI. Source builds can fall back to a system engine when the engine submodule isn't present.</div></details>
       <details class="qa"><summary>Does Burrow run on Windows?</summary>
         <div class="a">It's getting there — a native <b>WinUI 3 / .NET 8</b> port is in active <b>beta</b>, reaching parity with the Mac app tool-by-tool (Clean, Purge, Installers, Optimize, Software, Analyze, Status, History, and the MCP server). macOS is the mature flagship; Windows is build-from-source for now (an installer is coming), under <code class="k">windows/</code> in the repo. Track it on <a class="u" href="https://github.com/caezium/Burrow/tree/main/windows" target="_blank" rel="noopener">GitHub</a>.</div></details>
       <details class="qa"><summary>Is it signed and notarized?</summary>
@@ -579,7 +579,7 @@ cd Burrow/macos && xcodegen generate</div>
         <div class="foot-note">For your Mac, or a friend's. Free and open source. May your time be your own.</div>
       </div>
     </div>
-    <p class="disclaimer">Burrow is an independent open-source project. The <span class="mono">mo</span> CLI is © <a href="https://github.com/tw93/Mole" target="_blank" rel="noopener">tw93</a> (MIT) and is depended on at runtime; nothing from it is bundled.</p>
+    <p class="disclaimer">Burrow is an independent open-source project. It bundles <a href="https://github.com/caezium/burrow-digger" target="_blank" rel="noopener">its own MIT engine</a>, forked from the <span class="mono">mo</span> CLI at its last MIT release; the original is © <a href="https://github.com/tw93/Mole" target="_blank" rel="noopener">tw93</a>.</p>
   </div>
 </footer>
 

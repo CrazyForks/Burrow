@@ -48,7 +48,7 @@ struct DiskScanResult {
 
 enum DiskScanError: Error, LocalizedError {
     case moNotFound
-    case moTooOld(found: String?)
+    case moTooOld(found: String?, updatePolicy: MoleCLI.EngineUpdatePolicy)
     case moFailed(exitCode: Int32, stderr: String)
     case parseFailed(String)
 
@@ -56,12 +56,13 @@ enum DiskScanError: Error, LocalizedError {
         switch self {
         case .moNotFound:
             return NSLocalizedString("Mole CLI (`mo`) not found on PATH.", comment: "")
-        case .moTooOld(let found):
+        case .moTooOld(let found, let updatePolicy):
             return String(format: NSLocalizedString(
-                "Disk analysis needs Mole %@ or newer (you have %@). Run `brew upgrade mole`, then try again.",
+                "Disk analysis needs Mole %@ or newer (you have %@). %@",
                 comment: ""),
                 MoleCLI.minimumAnalyzeJSONVersion,
-                found ?? NSLocalizedString("an unknown version", comment: ""))
+                found ?? NSLocalizedString("an unknown version", comment: ""),
+                NSLocalizedString(MoleCLI.engineUpdateInstruction(for: updatePolicy), comment: ""))
         case .moFailed(let code, let stderr):
             return String(format: NSLocalizedString("mo analyze exited %d: %@", comment: ""),
                           code, String(stderr.prefix(200)))
@@ -88,9 +89,13 @@ enum DiskScanner {
         if BurrowConductor.isAvailable, let viaConductor = try? conductorScan(path, timeout: timeout) {
             return viaConductor
         }
-        guard case .installed = MoEngine.shared.availability() else {
+        guard case .installed(let executable) = MoEngine.shared.availability() else {
             throw DiskScanError.moNotFound
         }
+        let updatePolicy = MoleCLI.engineUpdatePolicy(
+            executable: executable,
+            bundledExecutable: MoleCLI.bundledExecutable()
+        )
         // 5-minute timeout — `mo analyze` on the home dir is usually a
         // few seconds, but a cold cache + large external volume + no
         // indexing can stretch it. Beyond 5 min something's wrong.
@@ -98,7 +103,10 @@ enum DiskScanner {
             MoCommand(target: .mo, args: ["analyze", "--json", path], timeout: timeout))
         guard result.exitCode == 0 else {
             if indicatesMissingJSONSupport(stderr: result.stderr) {
-                throw DiskScanError.moTooOld(found: MoleCLI.version())
+                throw DiskScanError.moTooOld(
+                    found: MoleCLI.version(),
+                    updatePolicy: updatePolicy
+                )
             }
             throw DiskScanError.moFailed(exitCode: result.exitCode, stderr: result.stderr)
         }

@@ -5,7 +5,8 @@ name: release
 #   git tag v0.5.0 && git push origin v0.5.0
 #
 # This builds a Release app, code-signs every executable with Developer ID,
-# notarizes + staples it, publishes a GitHub release with the zip, and bumps
+# notarizes + staples it, signs the ZIP and appcast with Sparkle Ed25519,
+# publishes both, and bumps
 # the Homebrew cask in caezium/homebrew-tap so `brew upgrade --cask
 # caezium/tap/burrow` picks it up. Pushing ordinary commits to main does NOT
 # touch the tap — only a tag. Releases fail closed when any signing or
@@ -18,6 +19,7 @@ name: release
 #   AC_API_KEY_ID         App Store Connect API key id
 #   AC_API_ISSUER_ID      App Store Connect issuer id
 #   AC_API_KEY_P8         base64 of the AuthKey_XXXX.p8
+#   SPARKLE_ED_PRIVATE_KEY private Sparkle seed exported by generate_keys -x
 #   TAP_PAT               fine-grained token for caezium/homebrew-tap
 #
 # Optional telemetry secrets — release.sh reads these from the environment
@@ -61,6 +63,7 @@ jobs:
           AC_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
           AC_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
           AC_KEY_P8: ${{ secrets.AC_API_KEY_P8 }}
+          SPARKLE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
           TAP_TOKEN: ${{ secrets.TAP_PAT }}
         run: |
           missing=()
@@ -70,6 +73,7 @@ jobs:
           [ -n "$AC_KEY_ID" ] || missing+=(AC_API_KEY_ID)
           [ -n "$AC_ISSUER_ID" ] || missing+=(AC_API_ISSUER_ID)
           [ -n "$AC_KEY_P8" ] || missing+=(AC_API_KEY_P8)
+          [ -n "$SPARKLE_KEY" ] || missing+=(SPARKLE_ED_PRIVATE_KEY)
           [ -n "$TAP_TOKEN" ] || missing+=(TAP_PAT)
           if [ "${#missing[@]}" -ne 0 ]; then
             echo "::error::Release blocked: missing required secret(s): ${missing[*]}"
@@ -141,7 +145,14 @@ jobs:
       # Use the newest Xcode on the runner so xcodebuild can read the project
       # format xcodegen emits (Homebrew's xcodegen targets the latest Xcode).
       - name: Select newest Xcode
-        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)" && xcodebuild -version
+        run: |
+          shopt -s nullglob
+          XCODE_APPS=(/Applications/Xcode_*.app)
+          [ "${#XCODE_APPS[@]}" -gt 0 ] \
+            || { echo "::error::No versioned Xcode app found on the runner."; exit 1; }
+          XCODE="$(printf '%s\n' "${XCODE_APPS[@]}" | sort -V | tail -1)"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
 
       # Cache the built universal fclones across releases so it builds only once (heavy —
       # two full dep-tree builds). Keyed on the pinned version.
@@ -182,8 +193,12 @@ jobs:
           APP="build_dist/Build/Products/Release/Burrow.app"
           [ -d "$APP" ] || { echo "::error::build produced no app at $APP"; exit 1; }
           VERSION=$(defaults read "$PWD/$APP/Contents/Info" CFBundleShortVersionString)
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "app=$APP" >> "$GITHUB_OUTPUT"
+          BUILD_NUMBER=$(defaults read "$PWD/$APP/Contents/Info" CFBundleVersion)
+          {
+            echo "version=$VERSION"
+            echo "build_number=$BUILD_NUMBER"
+            echo "app=$APP"
+          } >> "$GITHUB_OUTPUT"
 
       # The bundle phases are non-fatal by design (dev builds fall back) — but a RELEASE
       # without the conductor or engine ships with its headline features dead while the
@@ -211,12 +226,46 @@ jobs:
             exit 1
           fi
 
+      - name: Require Sparkle release configuration and matching keys
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          APP="${{ steps.build.outputs.app }}"
+          INFO="$APP/Contents/Info.plist"
+          require_plist_value() {
+            local key="$1" expected="$2" actual
+            actual="$(/usr/libexec/PlistBuddy -c "Print :$key" "$INFO")"
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::$key is '$actual' in the release app; expected '$expected'."
+              exit 1
+            fi
+          }
+          require_plist_value SURequireSignedFeed true
+          require_plist_value SUVerifyUpdateBeforeExtraction true
+          require_plist_value SUAllowsAutomaticUpdates false
+          require_plist_value SUAutomaticallyUpdate false
+          require_plist_value SUEnableSystemProfiling false
+          require_plist_value ITSAppUsesNonExemptEncryption false
+          require_plist_value SUFeedURL \
+            'https://github.com/caezium/Burrow/releases/latest/download/appcast.xml'
+          PUBLIC_KEY="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$INFO")"
+          DERIVED_PUBLIC="$(swift -e 'import Foundation; import CryptoKit; guard let encoded = ProcessInfo.processInfo.environment["SPARKLE_PRIVATE_KEY"], let seed = Data(base64Encoded: encoded, options: .ignoreUnknownCharacters), seed.count == 32 else { FileHandle.standardError.write(Data("SPARKLE_ED_PRIVATE_KEY must be the base64 32-byte seed exported by generate_keys -x\n".utf8)); exit(1) }; do { let key = try Curve25519.Signing.PrivateKey(rawRepresentation: seed); print(key.publicKey.rawRepresentation.base64EncodedString()) } catch { FileHandle.standardError.write(Data("Invalid Sparkle private key\n".utf8)); exit(1) }')"
+          if [ "$PUBLIC_KEY" = "SPARKLE_PUBLIC_KEY_REQUIRED" ] || [ -z "$PUBLIC_KEY" ]; then
+            echo "::error::SUPublicEDKey is not configured in macos/project.yml."
+            exit 1
+          fi
+          if [ "$DERIVED_PUBLIC" != "$PUBLIC_KEY" ]; then
+            echo "::error::SPARKLE_ED_PRIVATE_KEY does not match the SUPublicEDKey embedded in Burrow.app."
+            exit 1
+          fi
+          echo "Sparkle Ed25519 keypair matches the app's embedded public key."
+
       # Symbolicate Sentry crash/hang reports. Without the dSYM, every event's
       # Burrow frames arrive as <unknown> ("debug information file was
       # missing") — exactly what made the 0.6.7 "App Hanging" reports show only
       # system frames. Runs after the tag/version check so only a real
-      # release's symbols ship; skipped (with a warning) when no token is set,
-      # matching the sign/notarize steps.
+      # release's symbols ship; skipped (with a warning) when no token is set.
+      # Signing and notarization remain mandatory and fail closed independently.
       - name: Upload dSYMs to Sentry — skipped if no token
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
@@ -316,20 +365,81 @@ jobs:
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "Built Burrow ${{ steps.build.outputs.version }} (Developer ID signed + notarized) sha256=$SHA"
 
+      - name: Install pinned Sparkle release tools
+        env:
+          SPARKLE_VERSION: "2.9.4"
+          SPARKLE_SHA256: "ce89daf967db1e1893ed3ebd67575ed82d3902563e3191ca92aaec9164fbdef9"
+        run: |
+          ARCHIVE="$RUNNER_TEMP/Sparkle-${SPARKLE_VERSION}.tar.xz"
+          TOOLS="$RUNNER_TEMP/sparkle-release-tools"
+          curl --fail --location --silent --show-error \
+            "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz" \
+            --output "$ARCHIVE"
+          ACTUAL="$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')"
+          if [ "$ACTUAL" != "$SPARKLE_SHA256" ]; then
+            echo "::error::Sparkle tools checksum mismatch: got $ACTUAL"
+            exit 1
+          fi
+          mkdir -p "$TOOLS"
+          tar -xf "$ARCHIVE" -C "$TOOLS"
+          [ -x "$TOOLS/bin/generate_appcast" ] && [ -x "$TOOLS/bin/sign_update" ] \
+            || { echo "::error::Pinned Sparkle archive is missing release tools."; exit 1; }
+          echo "SPARKLE_TOOLS=$TOOLS/bin" >> "$GITHUB_ENV"
+
+      - name: Generate and verify signed Sparkle appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          VERSION="${{ steps.build.outputs.version }}"
+          BUILD_NUMBER="${{ steps.build.outputs.build_number }}"
+          ZIP="$PWD/dist/Burrow-${VERSION}.zip"
+          APPCAST="$PWD/dist/appcast.xml"
+          ARCHIVE_URL="https://github.com/caezium/Burrow/releases/download/${GITHUB_REF_NAME}/Burrow-${VERSION}.zip"
+          cp RELEASES.md "dist/Burrow-${VERSION}.md"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_TOOLS/generate_appcast" \
+            --ed-key-file - \
+            --download-url-prefix "https://github.com/caezium/Burrow/releases/download/${GITHUB_REF_NAME}/" \
+            --embed-release-notes \
+            --maximum-deltas 0 \
+            --versions "$BUILD_NUMBER" \
+            --link "https://github.com/caezium/Burrow" \
+            -o "$APPCAST" "$PWD/dist"
+          python3 scripts/verify-sparkle-appcast.py "$APPCAST" \
+            --archive "$ZIP" \
+            --version "$VERSION" \
+            --build "$BUILD_NUMBER" \
+            --url "$ARCHIVE_URL" \
+            --signature-output "$RUNNER_TEMP/sparkle-archive-signature.txt"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | \
+            "$SPARKLE_TOOLS/sign_update" --verify --ed-key-file - \
+            "$ZIP" "$(< "$RUNNER_TEMP/sparkle-archive-signature.txt")"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | \
+            "$SPARKLE_TOOLS/sign_update" --verify --ed-key-file - "$APPCAST"
+          echo "Signed Sparkle archive + feed verified; release publication is now allowed."
+
       - name: Publish GitHub release (idempotent)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           ZIP="dist/Burrow-${{ steps.build.outputs.version }}.zip"
+          APPCAST="dist/appcast.xml"
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             # Release already exists (e.g. re-run after adding TAP_PAT) —
-            # refresh the asset instead of failing.
+            # replace the archive first and the signed feed last. During that
+            # narrow window, a mismatch fails signature validation closed.
             gh release upload "$GITHUB_REF_NAME" "$ZIP" --clobber
+            gh release upload "$GITHUB_REF_NAME" "$APPCAST" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" "$ZIP" \
+            # Keep the release draft until both assets have uploaded; a
+            # partial upload must never become Sparkle's latest feed.
+            gh release create "$GITHUB_REF_NAME" "$ZIP" "$APPCAST" \
               --title "Burrow ${{ steps.build.outputs.version }}" \
-              --notes-file RELEASES.md
+              --notes-file RELEASES.md \
+              --draft
           fi
+          # Also publish a draft left by a previously interrupted attempt.
+          # Reaching this line means both freshly verified assets now exist.
+          gh release edit "$GITHUB_REF_NAME" --draft=false
 
       - name: Bump Homebrew cask in caezium/homebrew-tap
         env:
@@ -354,6 +464,10 @@ jobs:
           ruby <<'RUBY'
           cask_path = "tap/Casks/burrow.rb"
           cask = File.read(cask_path)
+          unless cask.match?(/^\s*auto_updates true\s*$/)
+            changed = cask.sub!(/^(\s*version "[^"]+"\s*\n)/, "\\1  auto_updates true\n")
+            abort "Burrow cask has no version line for auto_updates" unless changed
+          end
           legacy = <<'LEGACY'
             # Pre-1.0 builds aren't notarized yet, so clear the quarantine flag to
             # avoid a Gatekeeper block on first launch. Remove this once the app
@@ -404,6 +518,10 @@ jobs:
           fi
           if grep -qE 'xattr.*-cr|unsigned pre-1\.0' "$CASK"; then
             echo "::error::legacy Gatekeeper-bypass text remains in $CASK after notarization."
+            exit 1
+          fi
+          if ! grep -qE '^\s*auto_updates true\s*$' "$CASK"; then
+            echo "::error::Burrow cask is missing auto_updates true after enabling Sparkle."
             exit 1
           fi
           if grep -qF 'These are currently self-signed pre-1.0 builds' tap/README.md; then

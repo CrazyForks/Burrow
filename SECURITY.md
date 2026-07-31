@@ -1,11 +1,11 @@
 # Security & trust
 
-Burrow is a GUI that drives the [`mo` (Mole)](https://github.com/tw93/Mole)
-CLI. New official releases must pass Developer ID signing and Apple
+Burrow is a GUI that ships its own MIT engine, a fork of the
+[`mo` (Mole)](https://github.com/tw93/Mole) CLI. New official releases must pass Developer ID signing and Apple
 notarization before they can publish. This page is the honest account of what
 the app does, what touches the network, and how it handles admin rights, so you
-can decide before you run it. The actual cleaning/scanning is done by `mo`
-(MIT, © tw93); audit that too.
+can decide before you run it. The actual cleaning/scanning is done by that
+bundled engine (MIT, © tw93 for the original); audit it too.
 
 ## Code signing
 
@@ -17,6 +17,12 @@ artifact is published, the workflow updates the external Homebrew cask and
 removes its legacy quarantine bypass so Gatekeeper can verify the stapled
 ticket. Maintainer setup and first-release verification are in the [macOS
 signing runbook](docs/macos-signing.md).
+
+The release also embeds Sparkle 2.9.4 with a checked-in Ed25519 public key.
+After notarization, CI signs the update ZIP and `appcast.xml`, verifies both
+signatures and the private/public key match, and keeps a new GitHub release in
+draft until both assets exist. Sparkle verifies the signed feed and archive
+again on the Mac before installing.
 
 Burrow 0.10.5 and earlier predate this release gate, remain unsigned, and their
 Homebrew casks used a quarantine bypass. Locally built copies use an ad-hoc
@@ -36,12 +42,11 @@ This is the part people rightly scrutinize in cleaners. Burrow's model:
   matching `mo` command for that single action, then exits. You see and
   approve every elevation. (See `CommandRunner.runElevated` in
   `macos/Sources/TaskReport.swift`.)
-- **Honest caveat:** that elevation runs your Homebrew-installed `mo` as
-  root. On a default Apple-Silicon Homebrew, `/opt/homebrew` is
-  user-writable, so treat `mo` like any binary you'd `sudo` — only as
-  trustworthy as your Homebrew install. If your threat model is strict,
-  review `mo` and the elevation path before granting admin, or skip the
-  admin-only system caches (Burrow runs fine without them).
+- **Honest caveat:** official builds elevate the engine sealed inside the
+  Developer ID signed app. A source build can fall back to an external `mo`;
+  if it does, that executable is only as trustworthy as its install location
+  (Homebrew prefixes are normally user-writable). Review the engine and the
+  elevation path before granting admin, or skip the admin-only system caches.
 
 ## Network & privacy
 
@@ -65,8 +70,8 @@ This is the part people rightly scrutinize in cleaners. Burrow's model:
   `sendDefaultPii = false`. It's **on by default**; turn it off in **Settings → Anonymous
   usage** and both PostHog and Sentry stop. The exact event list is in
   **[TELEMETRY.md](TELEMETRY.md)**; the client code is
-  [`Sources/Telemetry.swift`](Sources/Telemetry.swift) and
-  [`Sources/CrashReporter.swift`](Sources/CrashReporter.swift). Both SDKs are
+  [`macos/Sources/Telemetry.swift`](macos/Sources/Telemetry.swift) and
+  [`macos/Sources/CrashReporter.swift`](macos/Sources/CrashReporter.swift). Both SDKs are
   **inert in source/dev builds** — keys are injected only at release time, so
   a build from this repo phones neither home. The **Windows app** does the same
   thing (opt-out via **Settings → Share crash reports & analytics**) — its own
@@ -86,20 +91,22 @@ This is the part people rightly scrutinize in cleaners. Burrow's model:
   - History is a local **SQLite** file under
     `~/Library/Application Support/Burrow/`.
 - **Other outbound paths:**
-  - **Burrow self-update check:** when "Check for updates automatically"
-    is on (Settings → About, on by default), Burrow makes one unauthenticated
-    GET to the GitHub Releases API on launch and about once a day to see if a
-    newer Burrow exists. It reads a version tag; it sends nothing about you,
-    and never installs anything — a found update only shows a banner. Turn the
-    toggle off to make the check fully manual (the menu/Settings button still
-    works).
+  - **Burrow self-update check:** when "Check for updates automatically" is on
+    (Settings → About, on by default), Sparkle makes an unauthenticated GET to
+    the signed `appcast.xml` GitHub Release asset on launch and about once a
+    day. It sends no Burrow analytics or device profile. If an update exists,
+    Sparkle presents its native UI and waits for approval before downloading
+    or installing it. Turn the toggle off to make checks fully manual; the
+    menu and Settings buttons still work.
   - The Software → **Updates** tab runs `brew outdated`, which contacts
     Homebrew's update feeds — the same check `brew` does for itself. It reads
     version info; it sends nothing about you. App version checks (Sparkle
     appcasts, App Store lookups) still happen only when you click "Check for
     updates".
-  - **Settings → Update Mole** runs `mo update` (Mole's own self-update
-    traffic), only when you click it.
+  - The engine inside `Burrow.app` never self-updates because changing a file
+    inside the bundle would invalidate its Developer ID seal. It updates only
+    with a signed Burrow release. Source builds using an external engine keep
+    a user-initiated engine updater in Settings.
   - The optional **AI "Explain" lens** (off by default) talks to
     `127.0.0.1` (Ollama / LM Studio). If you configure a hosted
     OpenAI-compatible endpoint instead, the metrics summary being explained

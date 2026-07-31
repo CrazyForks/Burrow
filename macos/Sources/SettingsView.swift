@@ -106,6 +106,7 @@ struct SettingsView: View {
     @State private var aiOpenAIKey: String = Store.aiOpenAIKey
     @State private var moleVersion: String = "—"
     @State private var moleUpdating = false
+    @State private var engineUpdatePolicy: MoleCLI.EngineUpdatePolicy = .unavailable
     @State private var copiedConfig = false
     @State private var touchIDStatus = "—"
     @State private var touchIDEnabled = false
@@ -316,10 +317,9 @@ struct SettingsView: View {
             section("About", "info.circle") {
                 infoRow("Version", appVersionText)
                 toggleRow("Check for updates automatically", isOn: $autoCheckUpdates) { on in
-                    Store.autoCheckForUpdates = on
-                    if on { AppUpdate.shared.checkNow() }
+                    AppUpdate.shared.setAutomaticChecks(on)
                 }
-                Text("Burrow checks GitHub for new releases on launch and about once a day, and shows a banner if one is found. It never installs anything on its own.")
+                Text("Sparkle checks Burrow's signed update feed on launch and about once a day. It asks before downloading or installing anything.")
                     .font(Brand.sans(11)).foregroundStyle(Brand.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
@@ -611,12 +611,18 @@ struct SettingsView: View {
 
             section("Mole engine", "shippingbox") {
                 infoRow("Version", moleVersion)
-                HStack {
-                    Spacer()
-                    if moleUpdating { ProgressView().controlSize(.small).padding(.trailing, 4) }
-                    PillButton(title: moleUpdating ? "Updating…" : "Update Mole", filled: false) { updateMole() }
+                if engineUpdatePolicy == .external {
+                    HStack {
+                        Spacer()
+                        if moleUpdating { ProgressView().controlSize(.small).padding(.trailing, 4) }
+                        PillButton(title: moleUpdating ? "Updating…" : "Update external engine", filled: false) { updateMole() }
+                    }
+                    footnote("This source build is using an engine outside Burrow.app, so its own updater remains available.")
+                } else if engineUpdatePolicy == .bundledWithApp {
+                    footnote("Included with Burrow. Engine updates arrive through signed Burrow releases so the app's Developer ID seal stays valid.")
+                } else {
+                    footnote("The bundled engine is missing. Reinstall Burrow to restore the signed app bundle.")
                 }
-                footnote("Runs `mo update` to update the Mole CLI engine Burrow drives. This is separate from Burrow's own app updates. If it needs a password or a confirmation it can't show here, run `mo update` in a terminal instead.")
             }
         }
     }
@@ -626,7 +632,11 @@ struct SettingsView: View {
     private func loadMoleVersion() {
         DispatchQueue.global(qos: .userInitiated).async {
             let v = MoleCLI.version()
-            DispatchQueue.main.async { moleVersion = v.map { "v\($0)" } ?? "not found" }
+            let policy = MoleCLI.currentEngineUpdatePolicy
+            DispatchQueue.main.async {
+                moleVersion = v.map { "v\($0)" } ?? "not found"
+                engineUpdatePolicy = policy
+            }
         }
     }
 
@@ -651,11 +661,14 @@ struct SettingsView: View {
                 if let v = newVersion { moleVersion = "v\(v)" }
                 let ok = (res?.exitCode ?? 1) == 0
                 let alert = NSAlert()
-                alert.messageText = ok ? "Mole is up to date" : "Update didn't complete"
+                alert.messageText = NSLocalizedString(
+                    ok ? "External engine is up to date" : "Update didn't complete",
+                    comment: ""
+                )
                 alert.informativeText = ok
-                    ? "Now on \(moleVersion)."
+                    ? String(format: NSLocalizedString("Now on %@.", comment: ""), moleVersion)
                     : (res?.stderr.isEmpty == false ? String(res!.stderr.prefix(300))
-                                                    : "`mo update` exited non-zero. Try running it in a terminal.")
+                                                    : NSLocalizedString("The external engine updater exited non-zero. Try running `mo update` in a terminal.", comment: ""))
                 alert.runModalQuiet()
             }
         }
