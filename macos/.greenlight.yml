@@ -1,4 +1,0 @@
-ignore:
-  # Unit-test fixtures intentionally contain HTTP URLs, IPv4 literals, and a
-  # test Info.plist; none of them are compiled into the shipping app.
-  - Tests

@@ -27,6 +27,34 @@ final class MoleCLITests: XCTestCase {
         XCTAssertNil(MoleCLI.parseVersion("built for macOS 14"))
     }
 
+    func testEngineUpdatePolicy_keepsSignedBundleImmutable() {
+        let bundled = "/Applications/Burrow.app/Contents/Resources/engine/mole"
+        XCTAssertEqual(
+            MoleCLI.engineUpdatePolicy(executable: bundled, bundledExecutable: bundled),
+            .bundledWithApp
+        )
+        XCTAssertEqual(
+            MoleCLI.engineUpdatePolicy(executable: "/opt/homebrew/bin/mo", bundledExecutable: nil),
+            .external
+        )
+        XCTAssertEqual(
+            MoleCLI.engineUpdatePolicy(executable: nil, bundledExecutable: nil),
+            .unavailable
+        )
+        XCTAssertEqual(
+            MoleCLI.engineUpdateInstruction(for: .bundledWithApp),
+            "Update Burrow to get the current bundled engine."
+        )
+        XCTAssertEqual(
+            MoleCLI.engineUpdateInstruction(for: .external),
+            "Use Settings › Engine › Update external engine, then try again."
+        )
+        XCTAssertEqual(
+            MoleCLI.engineUpdateInstruction(for: .unavailable),
+            "Reinstall Burrow to restore the bundled engine."
+        )
+    }
+
     // MARK: - Capture runner (MoleCLI.run)
     //
     // The subprocess boundary is exercised with real tiny system binaries

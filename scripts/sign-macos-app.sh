@@ -31,6 +31,12 @@ case "$MODE" in
         exit 1
         ;;
     esac
+    if [[ "$IDENTITY" =~ \(([A-Z0-9]{10})\)$ ]]; then
+      EXPECTED_TEAM="${BASH_REMATCH[1]}"
+    else
+      echo "error: release identity must end with a 10-character team ID in parentheses" >&2
+      exit 1
+    fi
     SIGN_ARGS=(--force --options runtime --timestamp --sign "$IDENTITY")
     if [ -n "${CODESIGN_KEYCHAIN:-}" ]; then
       [ -f "$CODESIGN_KEYCHAIN" ] \
@@ -40,6 +46,7 @@ case "$MODE" in
     ;;
   adhoc)
     [ "$IDENTITY" = "-" ] || { echo "error: ad-hoc mode requires identity '-'" >&2; exit 1; }
+    EXPECTED_TEAM=""
     SIGN_ARGS=(--force --sign -)
     ;;
   *)
@@ -49,11 +56,39 @@ esac
 
 sign_one() {
   local path="$1"
-  codesign "${SIGN_ARGS[@]}" "$path"
+  local metadata="identifier"
+  local existing_entitlements
+  # Sparkle's Autoupdate helper carries an application-identifier entitlement,
+  # and future nested dependencies may add their own. Re-sign every nested
+  # executable with our identity while retaining vendor-defined identifiers.
+  # Only ask codesign to preserve entitlements when the component has at least
+  # one: preserving an empty entitlement blob fails on Sparkle's Updater binary
+  # with errSecInternalComponent. The outer Burrow app gets its explicit
+  # entitlements separately below.
+  existing_entitlements="$(codesign -d --entitlements :- "$path" 2>/dev/null || true)"
+  if printf '%s' "$existing_entitlements" | grep -q '<key>'; then
+    metadata+=",entitlements"
+  fi
+  codesign "${SIGN_ARGS[@]}" \
+    --preserve-metadata="$metadata" "$path"
 }
 
 is_macho() {
   file -b "$1" | grep -q "Mach-O"
+}
+
+read_entitlements() {
+  local path="$1"
+  local plist
+  if ! plist="$(codesign -d --entitlements :- "$path" 2>/dev/null)"; then
+    echo "error: could not read entitlements from signed code: $path" >&2
+    return 1
+  fi
+  if ! printf '%s' "$plist" | plutil -lint - >/dev/null; then
+    echo "error: codesign returned invalid entitlements for: $path" >&2
+    return 1
+  fi
+  printf '%s' "$plist"
 }
 
 echo "==> signing nested Mach-O files ($MODE)"
@@ -83,14 +118,63 @@ codesign "${SIGN_ARGS[@]}" --entitlements "$ENTITLEMENTS" "$APP"
 
 codesign --verify --deep --strict --verbose=2 "$APP"
 
+if [ "$MODE" = "developer-id" ]; then
+  verify_team() {
+    local path="$1"
+    local actual
+    actual="$(codesign -d --verbose=4 "$path" 2>&1 | awk -F= '$1 == "TeamIdentifier" { print $2; exit }')"
+    [ "$actual" = "$EXPECTED_TEAM" ] || {
+      echo "error: nested code has team '${actual:-missing}', expected '$EXPECTED_TEAM': $path" >&2
+      exit 1
+    }
+  }
+
+  echo "==> verifying one Developer ID team across all nested code"
+  while IFS= read -r -d '' candidate; do
+    if is_macho "$candidate"; then verify_team "$candidate"; fi
+  done < <(find "$APP/Contents" -type f -print0)
+  while IFS= read -r -d '' container; do
+    verify_team "$container"
+  done < <(
+    find "$APP/Contents" -depth -type d \
+      \( -name "*.framework" -o -name "*.xpc" -o -name "*.appex" \
+         -o -name "*.app" -o -name "*.plugin" \) -print0
+  )
+  verify_team "$APP"
+fi
+
+# Sparkle 2.9.4's installer helper needs this entitlement. A generic re-sign
+# can silently strip it while leaving `codesign --verify --deep` green, so pin
+# the runtime contract explicitly whenever Sparkle is embedded.
+SPARKLE_FRAMEWORK="$APP/Contents/Frameworks/Sparkle.framework"
+if [ -d "$SPARKLE_FRAMEWORK" ]; then
+  SPARKLE_AUTOUPDATE="$(find "$SPARKLE_FRAMEWORK" -type f -name Autoupdate -print -quit)"
+  [ -n "$SPARKLE_AUTOUPDATE" ] \
+    || { echo "error: Sparkle.framework is missing Autoupdate" >&2; exit 1; }
+  SPARKLE_ENTITLEMENTS="$(read_entitlements "$SPARKLE_AUTOUPDATE")"
+  SPARKLE_APP_ID="$(
+    printf '%s' "$SPARKLE_ENTITLEMENTS" \
+      | plutil -extract 'com\.apple\.application-identifier' raw -o - - 2>/dev/null \
+      || true
+  )"
+  [ "$SPARKLE_APP_ID" = "org.sparkle-project.Sparkle.Autoupdate" ] || {
+    echo "error: Sparkle Autoupdate entitlement was lost while re-signing" >&2
+    exit 1
+  }
+fi
+
+APP_ENTITLEMENTS="$(read_entitlements "$APP")"
 GET_TASK_ALLOW="$(
-  codesign -d --entitlements :- "$APP" 2>/dev/null \
-    | plutil -extract com.apple.security.get-task-allow raw -o - - 2>/dev/null \
+  printf '%s' "$APP_ENTITLEMENTS" \
+    | plutil -extract 'com\.apple\.security\.get-task-allow' raw -o - - 2>/dev/null \
     || true
 )"
-if [ "$GET_TASK_ALLOW" = "true" ]; then
-  echo "error: release app contains com.apple.security.get-task-allow=true" >&2
-  exit 1
-fi
+case "$GET_TASK_ALLOW" in
+  ""|false) ;;
+  *)
+    echo "error: release app contains invalid com.apple.security.get-task-allow=$GET_TASK_ALLOW" >&2
+    exit 1
+    ;;
+esac
 
 echo "signed $SIGNED_MACHO Mach-O file(s) and $SIGNED_CONTAINERS code container(s); strict verification passed"

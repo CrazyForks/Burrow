@@ -11,6 +11,11 @@
           "title": "Signed & notarized macOS builds",
           "type": "infra",
           "note": "The fail-closed pipeline and credentials are ready; the first Developer ID release awaits end-to-end verification."
+        },
+        {
+          "title": "Signed in-app updates",
+          "type": "feat",
+          "note": "Sparkle's native updater and the signed ZIP/appcast release gate are implemented; the first notarized release still needs end-to-end verification."
         }
       ]
     },
@@ -19,11 +24,6 @@
       "title": "Planned",
       "blurb": "Decided — not started yet.",
       "items": [
-        {
-          "title": "In-app auto-update",
-          "type": "feat",
-          "note": "Once builds are signed, silent background update checks with a one-click install (Sparkle)."
-        },
         {
           "title": "Windows preview → first stable",
           "type": "feat",

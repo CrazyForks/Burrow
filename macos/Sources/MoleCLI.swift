@@ -2,8 +2,8 @@
 //  MoleCLI.swift
 //  Burrow
 //
-//  Wrapper around the `mo` command. Burrow doesn't ship Mole — it depends
-//  on a system-installed copy (`brew install mole`), found via PATH.
+//  Wrapper around Burrow's bundled engine, with a system-installed `mo` as
+//  the development/source-build fallback when the bundle has no engine.
 //
 //  Three commands matter to Burrow today:
 //    * `mo status --json` — periodic sampling (SnapshotProducer uses this).
@@ -23,6 +23,16 @@ import AppKit  // NSAlert
 import os
 
 enum MoleCLI {
+    enum EngineUpdatePolicy: Equatable {
+        /// The engine is inside Burrow.app and must stay immutable so the
+        /// Developer ID resource seal remains valid. It updates with Burrow.
+        case bundledWithApp
+        /// Source/development build using an external executable. The engine
+        /// can keep using its own updater because it is outside Burrow.app.
+        case external
+        case unavailable
+    }
+
     /// Test seam: when set, discovery checks ONLY these paths (no trusted
     /// list, no `which` fallback) so cache semantics are deterministic.
     internal static var discoveryCandidates: [String]?
@@ -137,10 +147,38 @@ enum MoleCLI {
 
     // MARK: - Install / version
 
+    static func engineUpdatePolicy(executable: String?, bundledExecutable: String?) -> EngineUpdatePolicy {
+        guard let executable else { return .unavailable }
+        guard let bundledExecutable else { return .external }
+        let selected = URL(fileURLWithPath: executable).resolvingSymlinksInPath().standardizedFileURL
+        let bundled = URL(fileURLWithPath: bundledExecutable).resolvingSymlinksInPath().standardizedFileURL
+        return selected == bundled ? .bundledWithApp : .external
+    }
+
+    static var currentEngineUpdatePolicy: EngineUpdatePolicy {
+        let bundled = bundledExecutable()
+        return engineUpdatePolicy(executable: findExecutable(), bundledExecutable: bundled)
+    }
+
+    static func engineUpdateInstruction(for policy: EngineUpdatePolicy) -> String {
+        switch policy {
+        case .bundledWithApp:
+            return "Update Burrow to get the current bundled engine."
+        case .external:
+            return "Use Settings › Engine › Update external engine, then try again."
+        case .unavailable:
+            return "Reinstall Burrow to restore the bundled engine."
+        }
+    }
+
+    static var currentEngineUpdateInstruction: String {
+        engineUpdateInstruction(for: currentEngineUpdatePolicy)
+    }
+
     /// The MIT engine normally ships BUNDLED inside the app (zero install). This is only the
     /// fallback hint shown if the bundled copy is somehow unavailable — reinstalling the app
     /// restores it.
-    static let installCommand = "brew install --cask caezium/tap/burrow"
+    static let installCommand = "brew reinstall --cask caezium/tap/burrow"
     /// The engine fork (the MIT engine is bundled with the app, pinned at mo's last MIT
     /// release before upstream relicensed to GPL-3.0).
     static let repoURL = URL(string: "https://github.com/caezium/burrow-digger")!

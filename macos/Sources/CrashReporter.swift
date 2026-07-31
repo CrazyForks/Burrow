@@ -94,8 +94,8 @@ enum CrashReporter {
             // SentrySDK.pauseAppHangTracking()/resumeAppHangTracking() rather
             // than disabling detection app-wide.
             // Binary-image and frame paths embed /Users/<name>/… whenever
-            // the app runs from Downloads or a home-dir checkout (the normal
-            // case for an unsigned zip). Scrub the username; the rest of the
+            // the app runs from Downloads, a home-dir checkout, or another
+            // manually relocated path. Scrub the username; the rest of the
             // path is the diagnostic part.
             options.beforeSend = { event in
                 scrubUserPaths(event)

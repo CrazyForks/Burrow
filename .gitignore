@@ -33,6 +33,10 @@ DerivedData/
 # macOS junk
 .DS_Store
 
+# Python test caches
+__pycache__/
+*.py[cod]
+
 # Agent worktrees and session state
 .claude/
 

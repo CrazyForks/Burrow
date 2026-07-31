@@ -5,12 +5,12 @@ Store, so it needs a **Developer ID Application** certificate and Apple
 notarization. It does not need a Developer ID Installer certificate because it
 does not ship a signed installer package.
 
-The tag workflow is fail closed. It checks the six signing/notarization
-credential values and the external-tap token before building, signs every
-Mach-O file with hardened runtime and a secure timestamp, submits the ZIP to
-Apple, requires an `Accepted` result, staples the ticket, and runs both strict
-code-signature verification and Gatekeeper assessment. Only then can it
-publish a GitHub release or update Homebrew.
+The tag workflow is fail closed. It requires every Apple, Sparkle, and
+external-tap credential before building; signs every Mach-O file with hardened
+runtime and a secure timestamp; requires an accepted Apple notarization,
+stapled ticket, strict code-signature verification, and Gatekeeper assessment;
+then signs and verifies both the update ZIP and appcast with Sparkle Ed25519.
+Only then can it publish a GitHub release or update Homebrew.
 
 ## 1. Create the certificate signing request
 
@@ -78,7 +78,32 @@ If Apple rejects that role for this team, revoke the key and recreate it with
 the next required role; App Store Connect does not allow an existing key’s
 access level to be edited.
 
-## 4. Add the GitHub Actions secrets
+## 4. Create the Sparkle Ed25519 key
+
+Burrow uses a separate Ed25519 key for Sparkle archives and feeds. This is not
+the Developer ID certificate, and rotating it carelessly would prevent
+installed copies from accepting later updates.
+
+Download the official Sparkle 2.9.4 release tools from
+[`sparkle-project/Sparkle`](https://github.com/sparkle-project/Sparkle/releases/tag/2.9.4)
+and verify `Sparkle-2.9.4.tar.xz` has SHA-256
+`ce89daf967db1e1893ed3ebd67575ed82d3902563e3191ca92aaec9164fbdef9`.
+Extract it, then run:
+
+```bash
+./bin/generate_keys --account caezium-burrow
+./bin/generate_keys --account caezium-burrow \
+  -x /absolute/path/to/Burrow-Sparkle-Ed25519.key
+```
+
+The first command stores the private seed in the login keychain and prints the
+public key. Put that public value in `macos/project.yml` as `SUPublicEDKey`.
+The exported file contains the base64 private seed: store it as a protected
+Bitwarden item/attachment and never commit it, paste it into an issue, or add
+it to an Actions artifact. Keep one tested backup because losing it breaks the
+in-app update chain for every installed release.
+
+## 5. Add the GitHub Actions secrets
 
 Run these from a machine where `gh auth status` confirms access to
 `caezium/Burrow`. The two pipelines stream base64 directly into GitHub and do
@@ -99,6 +124,8 @@ gh secret set MACOS_CERT_PASSWORD --repo caezium/Burrow
 gh secret set MACOS_SIGN_IDENTITY --repo caezium/Burrow
 gh secret set AC_API_KEY_ID --repo caezium/Burrow
 gh secret set AC_API_ISSUER_ID --repo caezium/Burrow
+gh secret set SPARKLE_ED_PRIVATE_KEY --repo caezium/Burrow \
+  < /absolute/path/to/Burrow-Sparkle-Ed25519.key
 ```
 
 `TAP_PAT` is also required. It should remain the existing fine-grained token
@@ -113,6 +140,7 @@ The required names are:
 - `AC_API_KEY_ID`
 - `AC_API_ISSUER_ID`
 - `AC_API_KEY_P8`
+- `SPARKLE_ED_PRIVATE_KEY`
 - `TAP_PAT`
 
 `MACOS_SIGN_IDENTITY` is the full output name, including the team ID:
@@ -122,14 +150,15 @@ Confirm only the names and timestamps, never their values:
 
 ```bash
 gh secret list --app actions --repo caezium/Burrow \
-  | grep -E '^(MACOS_|AC_API_|TAP_PAT)'
+  | grep -E '^(MACOS_|AC_API_|SPARKLE_|TAP_PAT)'
 ```
 
-After the secrets are stored, move both private-key files out of Downloads and
-into the password manager’s encrypted file storage. Keep a tested backup of the
-`.p12`; losing its private key prevents signing updates with that identity.
+After the secrets are stored, move every exported private-key file out of
+Downloads and into the password manager’s encrypted file storage. Keep tested
+backups of the `.p12` and Sparkle seed: losing either one prevents future
+releases from extending its respective trust chain.
 
-## 5. Cut and verify the first signed release
+## 6. Cut and verify the first signed release
 
 Merge the signing change, choose the next app version and build number, and
 update the release notes before tagging. Do not reuse or move an existing
@@ -137,14 +166,18 @@ public tag.
 
 The workflow order is:
 
-1. Require all signing and notarization secrets.
+1. Require all Apple, Sparkle, and external-tap secrets.
 2. Build and confirm the bundled conductor, engine, and fclones sidecar.
-3. Sign every executable and the outer app with Developer ID.
-4. Require Apple’s notarization result to be `Accepted`.
-5. Staple and validate the ticket, then require Gatekeeper acceptance.
-6. Package and publish the exact verified app.
-7. Update `caezium/homebrew-tap`, removing the legacy quarantine bypass and
-   unsigned warning only after the verified artifact exists.
+3. Require the Sparkle private seed to match the public key embedded in the app.
+4. Sign every executable and the outer app with Developer ID.
+5. Require Apple’s notarization result to be `Accepted`.
+6. Staple and validate the ticket, then require Gatekeeper acceptance.
+7. Package the exact verified app, generate the signed appcast, and
+   cryptographically verify the ZIP and feed before publishing either asset.
+8. Keep a new release draft until both assets exist, then publish it.
+9. Update `caezium/homebrew-tap`: add `auto_updates true` and remove the legacy
+   quarantine bypass and unsigned warning only after the verified artifact
+   exists.
 
 Download the release asset and verify the distributed copy:
 
@@ -158,12 +191,34 @@ spctl --assess --type execute --verbose=4 verified-release/Burrow.app
 
 The final `spctl` result must identify the source as `Notarized Developer ID`.
 Check that Homebrew’s live `Casks/burrow.rb` no longer contains `postflight`,
-`xattr -cr`, or an unsigned-build caveat.
+`xattr -cr`, or an unsigned-build caveat, and that it contains
+`auto_updates true`. Confirm the release has both `Burrow-VERSION.zip` and
+`appcast.xml`, and that
+`https://github.com/caezium/Burrow/releases/latest/download/appcast.xml`
+resolves to that feed.
 
-Once those checks pass, move “Signed & notarized macOS builds” from **Building**
-to **Recently shipped** in `docs/roadmap.json`, add the shipped version, and run
-`python3 scripts/site-release.py`. Do not make that documentation transition
-before the distributed artifact and live cask have both been verified.
+Once those checks pass, make one post-release documentation PR. It must:
+
+1. Add the shipped release to `docs/releases.json`, move “Signed & notarized
+   macOS builds” from **Building** to **Recently shipped** in
+   `docs/roadmap.json`, and run `python3 scripts/site-release.py`.
+2. Update the README and `SECURITY.md` from pre-release wording to the verified
+   version and remove `packaging/burrow.rb`, which is retained only as a legacy
+   cask reference until this first release succeeds.
+3. Confirm the external tap README and cask no longer contain `postflight`,
+   `xattr -cr`, or Burrow's unsigned-build warning.
+4. Install the downloaded notarized artifact on the affected macOS/FDA setup,
+   verify the stable identity behavior, then close #177 and #181. Do not close
+   them merely because the workflow was green.
+
+Keep #281 open until a real 0.11-to-successor Sparkle update completes; the
+first Sparkle-enabled build cannot prove its own upgrade path without a newer
+signed feed entry.
+
+Do not publish those claims or remove the historical workaround before the
+distributed artifact and live cask have both been verified. Keeping the website
+on the last released version until then prevents a failed notarization from
+leaving public release copy that claims an artifact exists when it does not.
 
 ## Telemetry and signing
 

@@ -25,9 +25,7 @@
     <a href="https://trendshift.io/repositories/47076?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-47076" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/47076/weekly?language=Swift" alt="caezium%2FBurrow | Trendshift" width="250" height="55"/></a>
 </p>
 
-**Burrow puts everything your Mac needs in one free, native app: junk cleanup, dev-artifact purge, app uninstall with leftover removal, duplicate finding, safe maintenance, disk maps, and live system status — powered by a bundled, audited open-source engine ([burrow-engine](https://github.com/caezium/burrow-engine), a fork of [Mole](https://github.com/tw93/Mole)'s `mo`), so there's nothing else to install. And it does what no other cleaner does: it keeps months of local metric history and runs a built-in MCP server, so AI agents like Claude Code, Codex, and Cursor can watch, query, and care for your Mac — every action consent-gated, audited, and reversible. Native on macOS, with a Windows preview under [`windows/`](windows/).**
-
-Signing is coming soon!
+**Burrow puts everything your Mac needs in one free, native app: junk cleanup, dev-artifact purge, app uninstall with leftover removal, duplicate finding, safe maintenance, disk maps, and live system status — powered by a bundled, audited open-source engine ([burrow-engine](https://github.com/caezium/burrow-digger), a fork of [Mole](https://github.com/tw93/Mole)'s `mo`), so there's nothing else to install. And it does what no other cleaner does: it keeps months of local metric history and runs a built-in MCP server, so AI agents like Claude Code, Codex, and Cursor can watch, query, and care for your Mac — every action consent-gated, audited, and reversible. Native on macOS, with a Windows preview under [`windows/`](windows/).**
 
 Mac:
 ```sh
@@ -174,6 +172,9 @@ A live, glanceable read of your Mac's vitals, refreshed continuously:
 - **MCP server** — a stdio JSON-RPC server (`burrow mcp` / `Burrow --mcp`) plus
   an optional localhost HTTP API, so any AI agent can query your Mac's recent
   state. See [Use it with your AI agent](#use-it-with-your-ai-agent).
+- **Signed in-app updates** — Sparkle checks a signed feed and presents its
+  native update UI; archives and the feed are both Ed25519-signed, and nothing
+  downloads or installs automatically.
 
 
 ## Platforms
@@ -221,10 +222,10 @@ The full board, with status and voting, lives at **[burrow.henryzh.dev/roadmap](
 **Building**
 
 - Signed & notarized macOS builds — The fail-closed pipeline and credentials are ready; the first Developer ID release awaits end-to-end verification.
+- Signed in-app updates — Sparkle's native updater and the signed ZIP/appcast release gate are implemented; the first notarized release still needs end-to-end verification.
 
 **Planned**
 
-- In-app auto-update — Once builds are signed, silent background update checks with a one-click install (Sparkle).
 - Windows preview → first stable — Data-loss and supply-chain hardening, parity, and test coverage before it loses the “preview” label. ([#93](https://github.com/caezium/Burrow/issues/93))
 
 **Considering**
@@ -279,7 +280,7 @@ Everything is local and takes effect immediately unless noted:
 | **Menu-bar icon** | Show the menu-bar item, or run as a regular Dock app instead. |
 | **MCP / agent access** | Copyable stdio config + the tool list for Claude Code, Cursor, Codex, Cline, and any MCP client. |
 | **Local HTTP query server** | Optional loopback REST endpoints + port for dashboards/curl. On Windows, disabling this keeps the local `/mcp` bridge available for stdio MCP. |
-| **Mole engine** | Shows the engine version Burrow is running, with a one-click **Update Mole**. |
+| **Mole engine** | Shows the active engine version. The bundled engine updates with signed Burrow releases; source builds using an external engine retain its updater. |
 
 ## Permissions & Full Disk Access
 
@@ -398,9 +399,10 @@ Burrow drives a bundled, open-source Mole engine (an MIT fork of `mo`). The hone
   stdio MCP clients. The macOS Updates tab runs `brew outdated`, the same check
   `brew` does for itself.
 - **Distribution signatures:** new official macOS tags fail unless Developer ID
-  signing and notarization pass; local macOS builds use an ad-hoc development
-  identity. Windows preview artifacts remain unsigned, so direct-download users
-  should expect SmartScreen or stricter Application Control policy prompts.
+  signing, notarization, and the signed Sparkle ZIP/feed checks pass; local
+  macOS builds use an ad-hoc development identity. Windows preview artifacts
+  remain unsigned, so direct-download users should expect SmartScreen or
+  stricter Application Control policy prompts.
 - The full honest write-up, including macOS admin trade-offs and the "Scan with
   admin" option, is in **[SECURITY.md](SECURITY.md)**.
 

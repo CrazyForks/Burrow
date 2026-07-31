@@ -2,58 +2,6 @@
   "_comment": "Source of truth for the site's release history. Newest first. Edit this, then run `python3 scripts/site-release.py` to regenerate the homepage 'New in X' section and releases.html. Icons/colors: run `python3 scripts/site-release.py --list-icons`.",
   "releases": [
     {
-      "version": "0.11.0",
-      "date": "2026-07-31",
-      "tag": "v0.11.0",
-      "tagline": "Burrow is now Developer ID signed and Apple notarized — Gatekeeper can verify official downloads, Full Disk Access gets a stable identity, and releases fail closed before anything untrusted can publish.",
-      "highlights": [
-        {
-          "icon": "shield",
-          "color": "teal",
-          "title": "Trusted by Gatekeeper",
-          "line": "The app and every bundled executable carry a Developer ID signature, hardened runtime, secure timestamp, and stapled Apple notarization ticket."
-        },
-        {
-          "icon": "key",
-          "color": "azure",
-          "title": "One stable identity",
-          "line": "Full Disk Access can survive normal updates after the one-time transition from an older ad-hoc build to Burrow's stable Developer ID identity."
-        },
-        {
-          "icon": "fingerprint",
-          "color": "lilac",
-          "title": "Privacy, declared accurately",
-          "line": "The privacy manifest describes the existing opt-out analytics and diagnostics as unlinked and non-tracking; signing adds no telemetry."
-        }
-      ],
-      "chips": [
-        "Upgrading from 0.10.5 or earlier may require one final Full Disk Access grant as Burrow moves from an ad-hoc identity to Developer ID.",
-        "Homebrew removes the legacy quarantine bypass only after Apple's notarization and Gatekeeper verification succeed."
-      ],
-      "sections": [
-        {
-          "label": "improved",
-          "items": [
-            "**Official downloads are trusted by Gatekeeper.** The app and every bundled executable carry a Developer ID signature, hardened runtime, secure timestamp, and a stapled Apple notarization ticket. Direct-download users no longer need to strip quarantine or use the right-click Open workaround.",
-            "**Full Disk Access has a stable identity.** Developer ID gives macOS one consistent code identity across releases, so privacy grants can survive normal updates after the one-time transition from an older ad-hoc build."
-          ]
-        },
-        {
-          "label": "privacy",
-          "items": [
-            "**Privacy disclosures match the app.** The bundled privacy manifest declares Product Interaction, Other Usage, Crash, Performance, and Other Diagnostic data as unlinked and non-tracking. Analytics and crash reporting remain opt-out, and signing adds no telemetry."
-          ]
-        },
-        {
-          "label": "security",
-          "items": [
-            "**A tag cannot publish a partially trusted build.** The release stops before packaging or publication unless signing, notarization, ticket stapling, strict code-sign verification, and Gatekeeper assessment all succeed.",
-            "**Homebrew preserves Apple's security checks.** Only after the notarized artifact passes every gate does the workflow remove Burrow's legacy quarantine bypass and unsigned warning from the live cask. ([#312](https://github.com/caezium/Burrow/pull/312))"
-          ]
-        }
-      ]
-    },
-    {
       "version": "0.10.5",
       "date": "2026-07-25",
       "tag": "v0.10.5",

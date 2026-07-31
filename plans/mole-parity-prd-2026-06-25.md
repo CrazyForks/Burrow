@@ -1,5 +1,9 @@
 # PRD — Close the Mole feature gaps (non-signing)
 
+> Historical scope. Burrow's Developer ID and notarization release path landed
+> in #312; the excluded resident privileged-helper features are still excluded
+> because signing alone does not make their product and safety trade-offs go away.
+
 > Local planning doc. **Not** filed as a GitHub issue (per request). Scope = every gap from the 2026-06-25 Burrow-vs-Mole audit **except** the three that require a Developer-ID-signed resident privileged helper (Battery Care, Fan control, the helper itself) — see Out of Scope.
 >
 > **Now also folds in two competitor-scan epics** (sourced from `competitor-feature-scan-2026-06-25.md`): **α — Process Inspector** (from ProcessSpy: deepen Status into a real inspector) and **β — Get Online → travel companion** (from Hotspot Guide: extend the shipped Get Online pane). Neither needs Developer-ID signing; β has one open permission decision (CoreWLAN + Location — see Cross-cutting decisions).

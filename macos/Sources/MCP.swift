@@ -1021,8 +1021,9 @@ struct ToolCatalog {
         guard res.exitCode == 0 else {
             if DiskScanner.indicatesMissingJSONSupport(stderr: res.stderr) {
                 return Self.jsonString([
-                    "error": "installed mole is too old for `analyze --json` " +
-                             "(needs >= \(MoleCLI.minimumAnalyzeJSONVersion)); run `brew upgrade mole`",
+                    "error": "the active engine is too old for `analyze --json` " +
+                             "(needs >= \(MoleCLI.minimumAnalyzeJSONVersion)); " +
+                             MoleCLI.currentEngineUpdateInstruction,
                     "path": path])
             }
             return Self.jsonString(["error": "mo analyze failed",

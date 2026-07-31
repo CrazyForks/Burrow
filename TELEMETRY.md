@@ -13,8 +13,9 @@ is the detail.
 | Product analytics | [PostHog](https://posthog.com) | `us.i.posthog.com` |
 | Crash / error reporting | [Sentry](https://sentry.io) | `*.ingest.us.sentry.io` (from the release DSN) |
 
-Client code: [`Sources/Telemetry.swift`](Sources/Telemetry.swift) (PostHog) and
-[`Sources/CrashReporter.swift`](Sources/CrashReporter.swift) (Sentry).
+Client code: [`macos/Sources/Telemetry.swift`](macos/Sources/Telemetry.swift)
+(PostHog) and [`macos/Sources/CrashReporter.swift`](macos/Sources/CrashReporter.swift)
+(Sentry).
 
 The shipping
 [`PrivacyInfo.xcprivacy`](macos/Resources/PrivacyInfo.xcprivacy) declares
@@ -22,6 +23,14 @@ Product Interaction and Other Usage Data for analytics, plus Crash,
 Performance, and Other Diagnostic Data for app functionality. Every category
 is unlinked and non-tracking. The manifest changes no collection behavior; it
 describes the opt-out behavior enforced below.
+
+Sparkle update checks are operational network traffic, not telemetry. Sparkle
+requests the signed `appcast.xml` asset from GitHub and, after user approval,
+the signed release ZIP; Burrow adds no analytics event, device profile, or
+identifier to those requests. Sparkle system profiling is explicitly disabled
+with `SUEnableSystemProfiling=false`; GitHub necessarily sees the request IP at
+the network layer. Signing and notarization add no PostHog or Sentry event and
+do not require another privacy-manifest data category.
 
 Unlike PostHog's fixed host, Sentry has no separate host setting — the ingest
 endpoint is encoded in the **DSN injected at release time**. For official
@@ -72,7 +81,7 @@ IP is attached to events either.
 |---|---|---|
 | `app_opened` | `cold_start: bool` | `Telemetry.start()` |
 | `app_terminated` | — | `AppDelegate.applicationWillTerminate` |
-| `engine_missing` | — (launched without the `mo` CLI; an activation signal) | `AppDelegate` |
+| `engine_missing` | — (launched without a bundled or external engine; an activation signal) | `AppDelegate` |
 | `onboarding_completed` | — | `AppDelegate` |
 | `telemetry_opt_in_changed` | `enabled: bool` | `Telemetry.setEnabled` |
 

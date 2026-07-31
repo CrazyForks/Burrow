@@ -22,12 +22,22 @@ of publishing an unsigned or un-notarized build.
   Product Interaction, Other Usage, Crash, Performance, and Other Diagnostic
   data as unlinked and non-tracking. Analytics and crash reporting remain
   opt-out, and signing adds no telemetry.
+- **Updates stay inside the trusted release chain.** Burrow now uses Sparkle's
+  native UI. Automatic checks remain on by default, but downloads and installs
+  always wait for approval. Both `Burrow-0.11.0.zip` and `appcast.xml` carry
+  Ed25519 signatures that are verified before publication and again on-device.
+- **The bundled engine no longer rewrites the app.** It updates only with a
+  signed Burrow release, preserving the Developer ID resource seal. Source
+  builds using an external engine still expose its manual updater.
 
 ## Security
 - **A tag cannot publish a partially trusted build.** The release stops before
-  packaging or publication unless signing, notarization, ticket stapling,
-  strict code-sign verification, and Gatekeeper assessment all succeed.
+  publication unless signing, notarization, ticket stapling, strict code-sign
+  verification, Gatekeeper assessment, the Sparkle keypair match, and both
+  update signatures all succeed. A new release remains a draft until both
+  assets upload; a mismatched rerun fails signature validation closed.
 - **Homebrew preserves Apple's security checks.** Only after the notarized
   artifact passes every gate does the workflow remove Burrow's legacy
-  quarantine bypass and unsigned warning from the live cask.
+  quarantine bypass and unsigned warning from the live cask; it also marks the
+  cask `auto_updates true` because Sparkle owns future in-app updates.
   ([#312](https://github.com/caezium/Burrow/pull/312))

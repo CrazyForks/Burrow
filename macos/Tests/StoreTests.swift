@@ -83,6 +83,23 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(Store.showMenuBarIcon)
     }
 
+    func testAutoCheckForUpdates_usesSparklesPreferenceKey() {
+        XCTAssertTrue(Store.autoCheckForUpdates)
+        Store.autoCheckForUpdates = false
+        XCTAssertFalse(Store.autoCheckForUpdates)
+        XCTAssertEqual(Store.d.object(forKey: "SUEnableAutomaticChecks") as? Bool, false)
+        XCTAssertNil(Store.d.object(forKey: "auto_check_for_updates"))
+    }
+
+    func testAutoCheckForUpdates_migratesLegacyOptOutOnce() {
+        Store.d.set(false, forKey: "auto_check_for_updates")
+
+        XCTAssertEqual(Store.migrateLegacyAutoCheckForUpdates(), false)
+        XCTAssertEqual(Store.d.object(forKey: "SUEnableAutomaticChecks") as? Bool, false)
+        XCTAssertNil(Store.d.object(forKey: "auto_check_for_updates"))
+        XCTAssertNil(Store.migrateLegacyAutoCheckForUpdates())
+    }
+
     func testSampleInterval_defaultsTo60() {
         XCTAssertEqual(Store.sampleIntervalSeconds, 60)
     }

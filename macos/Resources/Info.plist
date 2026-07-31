@@ -38,6 +38,24 @@
 	<string>$(POSTHOG_API_KEY)</string>
 	<key>PHPostHogHost</key>
 	<string>$(POSTHOG_HOST)</string>
+	<key>SUAllowsAutomaticUpdates</key>
+	<false/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUEnableSystemProfiling</key>
+	<false/>
+	<key>SUFeedURL</key>
+	<string>https://github.com/caezium/Burrow/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>f1LoqtxmfTxFgz2S5KlTQzZzhmOB8J8r5UdTRH48hvU=</string>
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 	<key>SentryDSN</key>
 	<string>$(SENTRY_DSN)</string>
 </dict>

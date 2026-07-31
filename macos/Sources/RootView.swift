@@ -51,8 +51,6 @@ struct RootView: View {
     /// made window layout passes take 2s+ on memory-pressed Macs (BURROW-8T).
     @State private var visitedTools: Set<Tool>
 
-    /// Burrow's own self-update state — drives the top banner.
-    @ObservedObject private var appUpdate = AppUpdate.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(db: DB, producer: SnapshotProducer, feeds: FeedHub, delegate: AppDelegate?, initialPane: Pane = .home) {
@@ -91,22 +89,10 @@ struct RootView: View {
                 // Content sits under the floating rail, inset on the left to
                 // clear it. The rail is drawn last so its hover labels fly out
                 // above the pane instead of behind it.
-                VStack(spacing: 0) {
-                    if let release = appUpdate.available {
-                        UpdateBanner(release: release,
-                                     onDownload: {
-                                         if UpdateCheck.installedViaHomebrew() { UpdateCheck.homebrewUpgrade() }
-                                         else { NSWorkspace.shared.open(release.url) }
-                                     },
-                                     onDismiss: { appUpdate.dismiss() })
-                            .padding(.horizontal, 18).padding(.top, 12).padding(.bottom, 4)
-                            .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
-                    }
-                    content
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .padding(.leading, 88)
-                .padding(.top, 12)
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.leading, 88)
+                    .padding(.top, 12)
 
                 // Floating left rail — a detached, rounded rail of icon buttons
                 // in place of a top tab bar. Padded clear of the traffic lights
@@ -153,7 +139,6 @@ struct RootView: View {
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: fdaGranted)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: appUpdate.available?.version)
     }
 
     /// Panes whose charts want live, high-cadence data. Home's Overview /
@@ -225,45 +210,5 @@ private extension View {
     func tabVisible(_ visible: Bool) -> some View {
         self.opacity(visible ? 1 : 0)
             .allowsHitTesting(visible)
-    }
-}
-
-/// A slim top strip shown when a newer Burrow release is found (self-update
-/// is opt-in, default on). Download opens the release page; dismiss suppresses
-/// this version. Never auto-installs.
-private struct UpdateBanner: View {
-    let release: UpdateCheck.Release
-    let onDownload: () -> Void
-    let onDismiss: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "arrow.down.circle.fill")
-                .font(.system(size: 16)).foregroundStyle(Tool.status.accent)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(String(format: NSLocalizedString("Burrow %@ is available", comment: ""), release.version))
-                    .font(Brand.sans(13, .semibold)).foregroundStyle(Brand.textPrimary)
-                Text(UpdateCheck.installedViaHomebrew()
-                     ? NSLocalizedString("One-click update + relaunch via Homebrew.", comment: "")
-                     : NSLocalizedString("Download it from the release page.", comment: ""))
-                    .font(Brand.mono(10)).foregroundStyle(Brand.textSecondary)
-            }
-            Spacer()
-            Button(action: onDownload) {
-                Text(UpdateCheck.installedViaHomebrew()
-                     ? NSLocalizedString("Update", comment: "")
-                     : NSLocalizedString("Download", comment: ""))
-                    .font(Brand.sans(12, .semibold)).foregroundStyle(.black)
-                    .padding(.horizontal, 14).padding(.vertical, 6)
-                    .background(Capsule().fill(.white))
-            }.buttonStyle(.plain)
-            Button(action: onDismiss) {
-                Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(Brand.textSecondary)
-                    .padding(6)
-            }.buttonStyle(.plain).accessibilityLabel(NSLocalizedString("Dismiss", comment: ""))
-        }
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Tool.status.accent.opacity(0.12)))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Tool.status.accent.opacity(0.35), lineWidth: 1))
     }
 }

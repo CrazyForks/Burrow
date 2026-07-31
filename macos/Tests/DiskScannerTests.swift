@@ -34,7 +34,7 @@ final class DiskScannerTests: XCTestCase {
         let msg = try XCTUnwrap(DiskScanError.moTooOld(found: "1.28.1").errorDescription)
         XCTAssertTrue(msg.contains(MoleCLI.minimumAnalyzeJSONVersion))
         XCTAssertTrue(msg.contains("1.28.1"))
-        XCTAssertTrue(msg.contains("brew upgrade mole"))
+        XCTAssertTrue(msg.contains("Update external engine"))
     }
 
     func testTooOldError_readableWithUnknownVersion() throws {

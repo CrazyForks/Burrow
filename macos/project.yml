@@ -14,7 +14,9 @@ settings:
     SWIFT_VERSION: "5.9"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     ENABLE_HARDENED_RUNTIME: YES
-    # Unsigned dev builds. Distribution config gets added later.
+    # Xcode leaves signing off for reproducible builds. Local scripts apply a
+    # coherent ad-hoc signature; the tag workflow applies Developer ID after
+    # every nested executable has been staged.
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: ""
     CODE_SIGNING_REQUIRED: NO
@@ -33,6 +35,9 @@ packages:
   PostHog:
     url: https://github.com/PostHog/posthog-ios
     exactVersion: 3.59.3
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.9.4
 # Sentry is NOT an SPM package: SPM eagerly downloads ALL of sentry-cocoa's
 # binary xcframework variants during resolution (Sentry, -Dynamic, -WithARM64e,
 # …, ~500 MB), and on the release runner that download hard-hangs xcodebuild
@@ -60,6 +65,17 @@ targets:
         # Burrow uses only exempt encryption supplied by macOS (for example,
         # URLSession HTTPS); it contains no proprietary or non-exempt crypto.
         ITSAppUsesNonExemptEncryption: false
+        # Stable latest-release asset. The appcast and every archive are
+        # Ed25519 signed; release.yml rejects a missing/invalid key or feed.
+        SUFeedURL: "https://github.com/caezium/Burrow/releases/latest/download/appcast.xml"
+        SUPublicEDKey: "f1LoqtxmfTxFgz2S5KlTQzZzhmOB8J8r5UdTRH48hvU="
+        SURequireSignedFeed: true
+        SUVerifyUpdateBeforeExtraction: true
+        SUEnableAutomaticChecks: true
+        SUEnableSystemProfiling: false
+        SUScheduledCheckInterval: 86400
+        SUAllowsAutomaticUpdates: false
+        SUAutomaticallyUpdate: false
         # Friendly, one-time prompts for the standard folders Mole scans
         # (purge/installer touch these). Full Disk Access still covers the
         # cache/container locations — see the in-app FDA gate.
@@ -91,6 +107,7 @@ targets:
         SENTRY_DSN: ""
     dependencies:
       - package: PostHog
+      - package: Sparkle
       - framework: vendor/Sentry.xcframework
         embed: false
     postBuildScripts:
@@ -153,6 +170,8 @@ targets:
       - path: Tests
     info:
       path: Tests/Info.plist
+      properties:
+        ITSAppUsesNonExemptEncryption: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.caezium.BurrowTests

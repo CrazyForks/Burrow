@@ -123,44 +123,13 @@
 <header class="hero page">
   <h1>Changelog</h1>
   <p>Every version at a glance — what it added, changed, and fixed. Full notes for each live on GitHub.</p>
-  <p class="count">21 releases · latest 0.11.0 · <a href="https://github.com/caezium/Burrow/releases" target="_blank" rel="noopener">GitHub releases ↗</a></p>
+  <p class="count">20 releases · latest 0.10.5 · <a href="https://github.com/caezium/Burrow/releases" target="_blank" rel="noopener">GitHub releases ↗</a></p>
 </header>
 
 <main class="page">
-    <article class="entry" id="v0.11.0">
-      <div class="ver-col">
-        <h2 class="ver">0.11.0<span class="latest">latest</span></h2>
-        <span class="date mono">Jul 31, 2026</span>
-        <a class="gh mono" href="https://github.com/caezium/Burrow/releases/tag/v0.11.0" target="_blank" rel="noopener">full notes ↗</a>
-      </div>
-      <div class="sbody">
-        <p class="lead">Burrow is now Developer ID signed and Apple notarized — Gatekeeper can verify official downloads, Full Disk Access gets a stable identity, and releases fail closed before anything untrusted can publish.</p>
-        <div class="sblock">
-          <div class="slabel mono">improved</div>
-          <ul class="slist">
-            <li><b>Official downloads are trusted by Gatekeeper.</b> The app and every bundled executable carry a Developer ID signature, hardened runtime, secure timestamp, and a stapled Apple notarization ticket. Direct-download users no longer need to strip quarantine or use the right-click Open workaround.</li>
-            <li><b>Full Disk Access has a stable identity.</b> Developer ID gives macOS one consistent code identity across releases, so privacy grants can survive normal updates after the one-time transition from an older ad-hoc build.</li>
-          </ul>
-        </div>
-        <div class="sblock">
-          <div class="slabel mono">privacy</div>
-          <ul class="slist">
-            <li><b>Privacy disclosures match the app.</b> The bundled privacy manifest declares Product Interaction, Other Usage, Crash, Performance, and Other Diagnostic data as unlinked and non-tracking. Analytics and crash reporting remain opt-out, and signing adds no telemetry.</li>
-          </ul>
-        </div>
-        <div class="sblock">
-          <div class="slabel mono">security</div>
-          <ul class="slist">
-            <li><b>A tag cannot publish a partially trusted build.</b> The release stops before packaging or publication unless signing, notarization, ticket stapling, strict code-sign verification, and Gatekeeper assessment all succeed.</li>
-            <li><b>Homebrew preserves Apple's security checks.</b> Only after the notarized artifact passes every gate does the workflow remove Burrow's legacy quarantine bypass and unsigned warning from the live cask. (<a href="https://github.com/caezium/Burrow/pull/312" target="_blank" rel="noopener">#312</a>)</li>
-          </ul>
-        </div>
-      </div>
-    </article>
-
     <article class="entry" id="v0.10.5">
       <div class="ver-col">
-        <h2 class="ver">0.10.5</h2>
+        <h2 class="ver">0.10.5<span class="latest">latest</span></h2>
         <span class="date mono">Jul 25, 2026</span>
         <a class="gh mono" href="https://github.com/caezium/Burrow/releases/tag/v0.10.5" target="_blank" rel="noopener">full notes ↗</a>
       </div>

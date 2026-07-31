@@ -632,29 +632,44 @@ enum Store {
 
     // MARK: - App updates (Burrow's own self-update)
 
-    /// Whether Burrow checks GitHub for its own new releases on launch and
-    /// ~daily while running. ON by default — one lightweight conditional GET;
-    /// a found update is surfaced as an in-window banner + a menu-bar dot,
-    /// never auto-installed. Off makes the check fully manual (the menu item
-    /// and the Settings button still work). The periodic GitHub request is
-    /// documented in SECURITY.md.
+    private static let legacyAutoCheckKey = "auto_check_for_updates"
+    private static let sparkleAutoCheckKey = "SUEnableAutomaticChecks"
+
+    /// Sparkle's own persisted preference is the source of truth. Until the
+    /// one-time migration runs, the getter still reflects Burrow's legacy key
+    /// so an existing opt-out never flashes back on in Settings.
     static var autoCheckForUpdates: Bool {
-        get { d.object(forKey: "auto_check_for_updates") as? Bool ?? true }
-        set { write(newValue, "auto_check_for_updates") }
+        get {
+            if let value = d.object(forKey: sparkleAutoCheckKey) as? Bool {
+                return value
+            }
+            return d.object(forKey: legacyAutoCheckKey) as? Bool ?? true
+        }
+        set {
+            write(newValue, sparkleAutoCheckKey)
+            if d.object(forKey: legacyAutoCheckKey) != nil {
+                d.removeObject(forKey: legacyAutoCheckKey)
+                d.synchronize()
+            }
+        }
     }
 
-    /// When the last background self-update check ran — throttles the
-    /// periodic check to ~daily.
-    static var lastUpdateCheckAt: Date? {
-        get { d.object(forKey: "last_update_check_at") as? Date }
-        set { write(newValue, "last_update_check_at") }
-    }
-
-    /// A found-update version the user dismissed from the banner; suppressed
-    /// until a newer one appears.
-    static var dismissedUpdateVersion: String {
-        get { d.string(forKey: "dismissed_update_version") ?? "" }
-        set { write(newValue, "dismissed_update_version") }
+    /// Move 0.10.5's preference into Sparkle once. Returning the migrated
+    /// value lets AppUpdate apply it before starting the updater; later
+    /// launches leave Sparkle entirely in charge of its own preference.
+    static func migrateLegacyAutoCheckForUpdates() -> Bool? {
+        guard d.object(forKey: sparkleAutoCheckKey) == nil,
+              let legacy = d.object(forKey: legacyAutoCheckKey) as? Bool else {
+            if d.object(forKey: legacyAutoCheckKey) != nil {
+                d.removeObject(forKey: legacyAutoCheckKey)
+                d.synchronize()
+            }
+            return nil
+        }
+        write(legacy, sparkleAutoCheckKey)
+        d.removeObject(forKey: legacyAutoCheckKey)
+        d.synchronize()
+        return legacy
     }
 
     // MARK: - History view

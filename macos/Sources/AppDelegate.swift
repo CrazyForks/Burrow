@@ -172,9 +172,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         self.setupMainMenu()
 
-        // Background self-update: opt-in (default on), surfaces a found
-        // Burrow release as the in-window banner + a menu-bar dot. Never
-        // installs; the menu/Settings "Check for Updates" stays the manual path.
+        // Start Sparkle's signed updater with the user's existing automatic-
+        // check preference. Downloads and installs always remain manual.
         Task { @MainActor in AppUpdate.shared.begin() }
 
         // Crash safety for the Clean review's whitelist session: a fenced
@@ -521,7 +520,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func showAboutFromMenu() { showAboutPanel() }
-    @objc private func checkForUpdatesFromMenu() { UpdateCheck.checkNow() }
+    @MainActor @objc private func checkForUpdatesFromMenu() { UpdateCheck.checkNow() }
 
     // MARK: - About
 

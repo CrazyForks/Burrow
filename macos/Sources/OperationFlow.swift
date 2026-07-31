@@ -395,6 +395,15 @@ struct SystemProcessPort: ProcessPort {
 
             do {
                 try t.run()
+                if !spec.elevated {
+                    // Process inherits duplicated write descriptors during
+                    // spawn; the parent must close its copies so the readers
+                    // observe EOF after the child exits. Keeping these handles
+                    // open can strand the stream forever after a timeout even
+                    // though terminate() successfully killed the child.
+                    try? outPipe.fileHandleForWriting.close()
+                    try? errPipe.fileHandleForWriting.close()
+                }
                 // Armed only after a successful spawn (a suspended source
                 // must never be cancelled/deallocated).
                 if let timeout = spec.timeout {

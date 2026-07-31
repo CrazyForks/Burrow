@@ -58,10 +58,11 @@ enum DiskScanError: Error, LocalizedError {
             return NSLocalizedString("Mole CLI (`mo`) not found on PATH.", comment: "")
         case .moTooOld(let found):
             return String(format: NSLocalizedString(
-                "Disk analysis needs Mole %@ or newer (you have %@). Run `brew upgrade mole`, then try again.",
+                "Disk analysis needs Mole %@ or newer (you have %@). %@",
                 comment: ""),
                 MoleCLI.minimumAnalyzeJSONVersion,
-                found ?? NSLocalizedString("an unknown version", comment: ""))
+                found ?? NSLocalizedString("an unknown version", comment: ""),
+                NSLocalizedString(MoleCLI.currentEngineUpdateInstruction, comment: ""))
         case .moFailed(let code, let stderr):
             return String(format: NSLocalizedString("mo analyze exited %d: %@", comment: ""),
                           code, String(stderr.prefix(200)))

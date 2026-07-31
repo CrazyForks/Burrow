@@ -323,7 +323,7 @@
 
   <!-- ===== HERO ===== -->
   <header class="hero">
-    <span class="brandline">Open source · <b>github.com/caezium/Burrow</b> · v0.11.0</span>
+    <span class="brandline">Open source · <b>github.com/caezium/Burrow</b> · v0.10.5</span>
     <h1>Burrow
       <svg class="mark" viewBox="0 0 100 100" aria-hidden="true"><path d="M14 74 a36 36 0 0 1 72 0 Z" fill="#F3ECDD"/><rect x="38" y="74" width="24" height="7" rx="3.5" fill="#121217"/></svg>
     </h1>
@@ -389,30 +389,29 @@
     <div class="sec-head wn-head">
       <div>
         <span class="sec-num">What's new · July 2026</span>
-        <h2 class="sec-title">New in 0.11.0</h2>
+        <h2 class="sec-title">New in 0.10.5</h2>
       </div>
       <a class="btn btn-out btn-sm" href="releases.html">All releases</a>
     </div>
 
     <div class="grid3 wn-grid">
-      <article class="tcard" style="--c: var(--teal)">
-        <div class="top"><div class="ico"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M9.5 11.5l2 2 3.5-3.5"/></svg></div><div class="nm">Trusted by Gatekeeper</div></div>
-        <p class="ds">The app and every bundled executable carry a Developer ID signature, hardened runtime, secure timestamp, and stapled Apple notarization ticket.</p>
+      <article class="tcard" style="--c: var(--lilac)">
+        <div class="top"><div class="ico"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg></div><div class="nm">One analyze call, whole hotspot map</div></div>
+        <p class="ds">burrow_analyze gains depth, limit, and min_size — it descends into the largest subdirectories itself, emits compact JSON instead of 35–60 KB blobs, and always reports what it pruned.</p>
       </article>
       <article class="tcard" style="--c: var(--azure)">
-        <div class="top"><div class="ico"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3l1 1-2 2M16 8l2 2"/></svg></div><div class="nm">One stable identity</div></div>
-        <p class="ds">Full Disk Access can survive normal updates after the one-time transition from an older ad-hoc build to Burrow's stable Developer ID identity.</p>
+        <div class="top"><div class="ico"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div><div class="nm">Timeouts say so</div></div>
+        <p class="ds">A killed clean used to render as exit_code 9 with empty output. Timed-out actions now return timed_out: true plus a hint an agent can act on.</p>
       </article>
-      <article class="tcard" style="--c: var(--lilac)">
-        <div class="top"><div class="ico"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 9.5A8 8 0 0120 12"/><path d="M7 12a5 5 0 0110 0c0 3-1 6-2.5 8"/><path d="M12 12c0 3-.6 5.5-1.8 7.6"/></svg></div><div class="nm">Privacy, declared accurately</div></div>
-        <p class="ds">The privacy manifest describes the existing opt-out analytics and diagnostics as unlinked and non-tracking; signing adds no telemetry.</p>
+      <article class="tcard" style="--c: var(--apricot)">
+        <div class="top"><div class="ico"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg></div><div class="nm">Honest slow-tool docs</div></div>
+        <p class="ds">The tools that scan for minutes now say so, and the agent docs + skill lead with the low-disk emergency playbook — the pattern that actually fires in practice.</p>
       </article>
     </div>
 
-    <div class="extra-label mono">// also tightened in 0.11.0</div>
+    <div class="extra-label mono">// also tightened in 0.10.5</div>
     <div class="wn-chips">
-      <span class="wn-chip"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>Upgrading from 0.10.5 or earlier may require one final Full Disk Access grant as Burrow moves from an ad-hoc identity to Developer ID.</span>
-      <span class="wn-chip"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>Homebrew removes the legacy quarantine bypass only after Apple's notarization and Gatekeeper verification succeed.</span>
+      <span class="wn-chip"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>Still ad-hoc-signed — re-grant Full Disk Access once after updating.</span>
     </div>
     <!-- WN:END -->
   </section>
@@ -488,7 +487,7 @@
       <div class="pr"><div class="n">4</div><div><div class="lead">Free, open, no upsell.</div>
         <p>Five tools plus the HUD, history and the MCP server — all of it, <b>MIT-licensed</b>. Every line is on GitHub. No trial limits, no accounts, no trade.</p></div></div>
       <div class="pr"><div class="n">5</div><div><div class="lead">Built on an audited engine.</div>
-        <p>Burrow bundles nothing from <span class="cmd">mo</span> — it drives the same binary you can read and run yourself. The honest trade-offs, including the admin path, are in <a href="https://github.com/caezium/Burrow/blob/main/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>.</p></div></div>
+        <p>Burrow carries its own MIT-licensed engine, forked from <span class="cmd">mo</span> and pinned with the app, so every install runs the version we built and reviewed. The honest trade-offs, including the admin path, are in <a href="https://github.com/caezium/Burrow/blob/main/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>.</p></div></div>
     </div>
   </section>
 
@@ -518,7 +517,7 @@ brew install --cask caezium/tap/burrow</div>
       </div>
       <div class="inst">
         <h3>Build from source</h3>
-        <p>Needs <code class="k">xcodegen</code> + <code class="k">mole</code>. Every line is yours to read first.</p>
+        <p>Needs <code class="k">xcodegen</code> plus the repository submodules; the build stages the engine into the app. Every line is yours to read first.</p>
         <div class="code" data-copy="git clone https://github.com/caezium/Burrow.git
 cd Burrow/macos && xcodegen generate"><button class="copy">copy</button>git clone …/caezium/Burrow.git
 cd Burrow/macos && xcodegen generate</div>
@@ -537,9 +536,9 @@ cd Burrow/macos && xcodegen generate</div>
       <details class="qa"><summary>How is Burrow different from the <code class="k">mo</code> CLI?</summary>
         <div class="a"><code class="k">mo</code> is the free, open-source terminal engine that does the real work. Burrow is the native Mac GUI around it — disk maps, a status dashboard, the menu-bar HUD, multi-select uninstall, one-click workflows — plus two things the CLI doesn't have: a long-range metric history and an MCP server for agents.</div></details>
       <details class="qa"><summary>Is it really free?</summary>
-        <div class="a">Yes — free and MIT-licensed, with no accounts, ads or upsells. If you'd rather have a polished, signed, supported app and want to fund the <code class="k">mo</code> engine, <a class="u" href="https://mole.fit/" target="_blank" rel="noopener">mole.fit</a> is $19 and worth it. Burrow is the open-source alternative for people who want the source and the agent hooks.</div></details>
-      <details class="qa"><summary>Why does it need the Mole CLI?</summary>
-        <div class="a">Burrow doesn't reimplement cleaning or analysis — it drives the audited <code class="k">mo</code> binary and bundles nothing from it. That keeps Burrow thin and means the dangerous work runs through a tool you can audit independently. <code class="k">brew install mole</code> first, or Burrow refuses to launch.</div></details>
+        <div class="a">Yes — free and MIT-licensed, with no accounts, ads or upsells. If you'd rather buy direct commercial support and want to fund the <code class="k">mo</code> engine, <a class="u" href="https://mole.fit/" target="_blank" rel="noopener">mole.fit</a> is $19 and worth it. Burrow is the open-source alternative for people who want the source and the agent hooks.</div></details>
+      <details class="qa"><summary>Does it need a separate cleaning engine?</summary>
+        <div class="a">No. Burrow bundles its own MIT-licensed engine, forked from the open-source <code class="k">mo</code> codebase and pinned to the app release, so Homebrew and direct-download installs work without a separate CLI. Source builds can fall back to a system engine when the engine submodule isn't present.</div></details>
       <details class="qa"><summary>Does Burrow run on Windows?</summary>
         <div class="a">It's getting there — a native <b>WinUI 3 / .NET 8</b> port is in active <b>beta</b>, reaching parity with the Mac app tool-by-tool (Clean, Purge, Installers, Optimize, Software, Analyze, Status, History, and the MCP server). macOS is the mature flagship; Windows is build-from-source for now (an installer is coming), under <code class="k">windows/</code> in the repo. Track it on <a class="u" href="https://github.com/caezium/Burrow/tree/main/windows" target="_blank" rel="noopener">GitHub</a>.</div></details>
       <details class="qa"><summary>Is it signed and notarized?</summary>
@@ -580,7 +579,7 @@ cd Burrow/macos && xcodegen generate</div>
         <div class="foot-note">For your Mac, or a friend's. Free and open source. May your time be your own.</div>
       </div>
     </div>
-    <p class="disclaimer">Burrow is an independent open-source project. The <span class="mono">mo</span> CLI is © <a href="https://github.com/tw93/Mole" target="_blank" rel="noopener">tw93</a> (MIT) and is depended on at runtime; nothing from it is bundled.</p>
+    <p class="disclaimer">Burrow is an independent open-source project. It bundles <a href="https://github.com/caezium/burrow-digger" target="_blank" rel="noopener">its own MIT engine</a>, forked from the <span class="mono">mo</span> CLI at its last MIT release; the original is © <a href="https://github.com/tw93/Mole" target="_blank" rel="noopener">tw93</a>.</p>
   </div>
 </footer>
 
