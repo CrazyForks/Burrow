@@ -10,7 +10,7 @@
         {
           "title": "Signed & notarized macOS builds",
           "type": "infra",
-          "note": "The fail-closed pipeline is ready; the first Developer ID release awaits Apple credentials and end-to-end verification."
+          "note": "The fail-closed pipeline and credentials are ready; the first Developer ID release awaits end-to-end verification."
         }
       ]
     },

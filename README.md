@@ -220,7 +220,7 @@ The full board, with status and voting, lives at **[burrow.henryzh.dev/roadmap](
 
 **Building**
 
-- Signed & notarized macOS builds — The fail-closed pipeline is ready; the first Developer ID release awaits Apple credentials and end-to-end verification.
+- Signed & notarized macOS builds — The fail-closed pipeline and credentials are ready; the first Developer ID release awaits end-to-end verification.
 
 **Planned**
 
