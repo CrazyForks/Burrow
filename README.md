@@ -21,8 +21,9 @@
 </p>
 
 <p align="center">
+  <a href="https://trendshift.io/repositories/47076" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/47076" alt="caezium%2FBurrow | Trendshift" width="250" height="55"/></a>
   <a href="https://trendshift.io/repositories/47076" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/47076/daily?language=Swift" alt="caezium/Burrow on Trendshift" width="250" height="55"/></a>
-    <a href="https://trendshift.io/repositories/47076?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-47076" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/47076/weekly?language=Swift" alt="caezium%2FBurrow | Trendshift" width="250" height="55"/></a>
+    <a href="https://trendshift.io/repositories/47076" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/47076/weekly?language=Swift" alt="caezium%2FBurrow | Trendshift" width="250" height="55"/></a>
 </p>
 
 **Burrow puts everything your Mac needs in one free, native app: junk cleanup, dev-artifact purge, app uninstall with leftover removal, duplicate finding, safe maintenance, disk maps, and live system status — powered by a bundled, audited open-source engine ([burrow-engine](https://github.com/caezium/burrow-digger), a fork of [Mole](https://github.com/tw93/Mole)'s `mo`), so there's nothing else to install. And it does what no other cleaner does: it keeps months of local metric history and runs a built-in MCP server, so AI agents like Claude Code, Codex, and Cursor can watch, query, and care for your Mac — every action consent-gated, audited, and reversible. Native on macOS, with a Windows preview under [`windows/`](windows/).**
