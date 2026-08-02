@@ -384,11 +384,12 @@ enum Store {
 
     // MARK: - Telemetry
 
-    /// Anonymous usage + crash-reporting opt-in (active-day counts + app/OS/arch
-    /// breakdown). ON by default and opt-out — flipping it off in Settings sends
-    /// one final opt-out event, then mutes both SDKs (PostHog + Sentry). Their
-    /// local files (random ids, queued events) stay on disk but nothing further
-    /// is sent. No account, no PII, no file contents; see `Telemetry.swift`.
+    /// Anonymous usage + diagnostics opt-in (product events, crash/hang reports,
+    /// release health, and sampled fixed-name performance spans). ON by default
+    /// and opt-out — flipping it off in Settings sends one final opt-out event,
+    /// then mutes the PostHog transport and closes Sentry. Their local random
+    /// ids and any Sentry cache stay on disk, but nothing further is sent. No
+    /// account, no PII, no file contents; see `Telemetry.swift`.
     static var telemetryEnabled: Bool {
         get { d.object(forKey: "telemetry_enabled") as? Bool ?? true }
         set { write(newValue, "telemetry_enabled") }
@@ -630,10 +631,20 @@ enum Store {
         set { write(newValue, "telemetry_notice_acknowledged") }
     }
 
+    /// The component/app/OS recovery key for which the explanation was shown.
+    /// A changed build can have a different AppKit or updater result, so it
+    /// gets its own notice while repeat launches on one build stay quiet.
+    static var lastCompatibilityNoticeBuild: String {
+        get { d.string(forKey: "last_compatibility_notice_build") ?? "" }
+        set { write(newValue, "last_compatibility_notice_build") }
+    }
+
     // MARK: - App updates (Burrow's own self-update)
 
     private static let legacyAutoCheckKey = "auto_check_for_updates"
+    private static let legacyLastCheckKey = "last_update_check_at"
     private static let sparkleAutoCheckKey = "SUEnableAutomaticChecks"
+    private static let sparkleLastCheckKey = "SULastCheckTime"
 
     /// Sparkle's own persisted preference is the source of truth. Until the
     /// one-time migration runs, the getter still reflects Burrow's legacy key
@@ -654,22 +665,34 @@ enum Store {
         }
     }
 
-    /// Move 0.10.5's preference into Sparkle once. Returning the migrated
-    /// value lets AppUpdate apply it before starting the updater; later
-    /// launches leave Sparkle entirely in charge of its own preference.
-    static func migrateLegacyAutoCheckForUpdates() -> Bool? {
-        guard d.object(forKey: sparkleAutoCheckKey) == nil,
-              let legacy = d.object(forKey: legacyAutoCheckKey) as? Bool else {
-            if d.object(forKey: legacyAutoCheckKey) != nil {
-                d.removeObject(forKey: legacyAutoCheckKey)
-                d.synchronize()
-            }
-            return nil
+    /// Move 0.10.5's update preferences into Sparkle once. Preserving the
+    /// last-check date avoids treating every upgrade as immediately overdue;
+    /// existing Sparkle values always win if it has already run.
+    ///
+    /// Returning the migrated automatic-check choice lets AppUpdate apply it
+    /// before starting the updater. Later launches leave Sparkle entirely in
+    /// charge of both values.
+    static func migrateLegacyUpdatePreferences() -> Bool? {
+        let legacyChoice = d.object(forKey: legacyAutoCheckKey) as? Bool
+        let legacyLastCheck = d.object(forKey: legacyLastCheckKey) as? Date
+        var migratedChoice: Bool?
+
+        if d.object(forKey: sparkleAutoCheckKey) == nil, let legacyChoice {
+            d.set(legacyChoice, forKey: sparkleAutoCheckKey)
+            migratedChoice = legacyChoice
         }
-        write(legacy, sparkleAutoCheckKey)
-        d.removeObject(forKey: legacyAutoCheckKey)
-        d.synchronize()
-        return legacy
+        if d.object(forKey: sparkleLastCheckKey) == nil, let legacyLastCheck {
+            d.set(legacyLastCheck, forKey: sparkleLastCheckKey)
+        }
+
+        let hasLegacyValues = d.object(forKey: legacyAutoCheckKey) != nil
+            || d.object(forKey: legacyLastCheckKey) != nil
+        if hasLegacyValues {
+            d.removeObject(forKey: legacyAutoCheckKey)
+            d.removeObject(forKey: legacyLastCheckKey)
+            d.synchronize()
+        }
+        return migratedChoice
     }
 
     // MARK: - History view
