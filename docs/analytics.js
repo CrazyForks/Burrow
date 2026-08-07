@@ -2,7 +2,10 @@
   'use strict';
 
   var projectKey = '__POSTHOG_PROJECT_KEY__';
-  if (window.location.hostname !== 'burrow.henryzh.dev' || !/^phc_[A-Za-z0-9]+$/.test(projectKey)) {
+  // Both hosts during the move to burrow.computer; the old one 301s but a
+  // cached page can still execute here for a while.
+  var SITE_HOSTS = ['burrow.computer', 'burrow.henryzh.dev'];
+  if (SITE_HOSTS.indexOf(window.location.hostname) === -1 || !/^phc_[A-Za-z0-9]+$/.test(projectKey)) {
     return;
   }
 
@@ -119,16 +122,27 @@
   });
 
   var interactions = {
+    // install command copies
     'homebrew.hero': ['website_homebrew_copy_clicked', { command: 'install', placement: 'hero' }],
-    'homebrew.install_card': ['website_homebrew_copy_clicked', { command: 'install', placement: 'install_card' }],
-    'download.hero': ['website_download_clicked', { destination: 'github_release', placement: 'hero' }],
-    'download.navigation': ['website_download_clicked', { destination: 'github_release', placement: 'navigation' }],
-    'download.pricing': ['website_download_clicked', { destination: 'github_release', placement: 'pricing' }],
-    'download.windows': ['website_download_clicked', { destination: 'github_release', placement: 'windows' }],
-    'download.changelog': ['website_download_clicked', { destination: 'github_release', placement: 'changelog' }],
-    'download.roadmap': ['website_download_clicked', { destination: 'github_release', placement: 'roadmap' }]
+    'homebrew.landing': ['website_homebrew_copy_clicked', { command: 'install', placement: 'landing_picker' }],
+    'homebrew.install': ['website_homebrew_copy_clicked', { command: 'install', placement: 'install_page' }],
+    // download clicks, by where the visitor was standing
+    'download.hero': ['website_download_clicked', { destination: 'install_page', placement: 'hero' }],
+    'download.navigation': ['website_download_clicked', { destination: 'install_page', placement: 'navigation' }],
+    'download.home': ['website_download_clicked', { destination: 'install_page', placement: 'navigation' }],
+    'download.landing_mac': ['website_download_clicked', { destination: 'github_asset', platform: 'macos', placement: 'landing_picker' }],
+    'download.landing_windows': ['website_download_clicked', { destination: 'github_asset', platform: 'windows', placement: 'landing_picker' }],
+    'download.install_mac': ['website_download_clicked', { destination: 'github_asset', platform: 'macos', placement: 'install_page' }],
+    'download.install_windows': ['website_download_clicked', { destination: 'github_asset', platform: 'windows', placement: 'install_page' }],
+    'download.windows': ['website_download_clicked', { destination: 'github_asset', platform: 'windows', placement: 'legacy' }],
+    // the nav download button, labelled by which page it was clicked from
+    'download.install': ['website_download_clicked', { destination: 'install_page', placement: 'nav_install' }],
+    'download.docs': ['website_download_clicked', { destination: 'install_page', placement: 'nav_docs' }],
+    'download.compare': ['website_download_clicked', { destination: 'install_page', placement: 'nav_compare' }],
+    'download.blog': ['website_download_clicked', { destination: 'install_page', placement: 'nav_blog' }],
+    'download.changelog': ['website_download_clicked', { destination: 'install_page', placement: 'nav_changelog' }],
+    'download.roadmap': ['website_download_clicked', { destination: 'install_page', placement: 'nav_roadmap' }]
   };
-
   document.addEventListener('click', function (event) {
     if (!event.target || typeof event.target.closest !== 'function') return;
     var control = event.target.closest('[data-burrow-analytics]');
