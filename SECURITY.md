@@ -48,14 +48,60 @@ or notarization and changes between builds.
 
 This is the part people rightly scrutinize in cleaners. Burrow's model:
 
-- **Burrow installs no privileged/background helper and no XPC root
-  service.** There is nothing persistently running as root and nothing for
-  another local process to connect to.
+- **By default Burrow installs no privileged helper.** Out of the box there
+  is nothing running as root and nothing for another local process to
+  connect to.
 - When **Clean** or **Optimize** needs admin rights, **macOS's own
   authorization dialog** asks for your password, and Burrow runs the
   matching `mo` command for that single action, then exits. You see and
-  approve every elevation. (See `CommandRunner.runElevated` in
-  `macos/Sources/TaskReport.swift`.)
+  approve every elevation.
+- **Optional privileged helper.** Settings ▸ Advanced can install a small
+  signed launch daemon (`SMAppService`) so those same operations can
+  authenticate with Touch ID instead of a password-only prompt. It is
+  strictly opt-in and takes its own one-time macOS approval. If you install
+  it:
+  - **It grants no standing privilege.** Installing the helper authorizes
+    nothing, and there is no "authenticate once for this launch". You are
+    asked to authenticate for each privileged operation you start.
+  - **The one caveat, stated honestly:** the credential from that
+    authentication stays valid for a 10-second window, because it has to
+    survive the hop from the app to the helper. A second operation begun
+    inside that window would not prompt again. The window covers an
+    inter-process message, not a user changing their mind, and it is the
+    shortest value that lets the check work at all. The rest is enforced by
+    the right's own definition (`shared: false` keeps the credential out of
+    other processes, `allow-root: false` stops the root helper satisfying it
+    by itself), and each operation ID is served at most once so a captured
+    request cannot be replayed.
+  - **It cannot be asked to run anything else.** The helper accepts seven typed
+    operations — scan, clean, optimize, the optimize preview, flush DNS,
+    renew DHCP, and reading the Login Items list — and derives every command
+    line itself. There is no field in its API for a path, a shell string, or
+    an executable, so a caller that fully controls the message still cannot
+    express "run this".
+  - **The only value a caller supplies** is the network interface name for
+    renew DHCP. It is checked twice: against a strict `en0`-shaped pattern,
+    and against the interfaces that actually exist on the machine. A
+    well-formed name for an interface that isn't there is refused.
+  - **No shell.** The helper runs the bundled engine, plus exactly four
+    system tools by absolute path (`/usr/bin/dscacheutil`, `/usr/bin/killall`,
+    `/usr/sbin/ipconfig`, `/usr/bin/sfltool`), each as a separate process with
+    fixed arguments.
+    This is stricter than the path it replaces: flushing DNS previously
+    elevated `/bin/sh -c "dscacheutil -flushcache; killall -HUP mDNSResponder"`,
+    handing a command string to a root shell.
+  - **Only Burrow can talk to it.** The daemon pins its callers to Burrow's
+    bundle identifier and signing team via the XPC connection's code-signing
+    requirement, so another local process cannot reach it or use it to raise
+    a credential prompt.
+  - **It runs only your engine, or those four Apple tools.** The engine it
+    executes is the copy inside the app bundle, resolved relative to the
+    helper's own path, never through `PATH` or an environment variable. Before
+    running anything the helper verifies the whole app bundle against its own
+    signing team, which seals the engine and every library the engine loads.
+  - **You can remove it** from Settings, or from System Settings ▸ General ▸
+    Login Items & Extensions.
+  - Code: `macos/Sources/PrivilegedHelper/`, `macos/HelperSources/`.
 - **Honest caveat:** official builds elevate the engine sealed inside the
   Developer ID signed app. A source build can fall back to an external `mo`;
   if it does, that executable is only as trustworthy as its install location

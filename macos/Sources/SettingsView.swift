@@ -16,7 +16,6 @@
 
 import SwiftUI
 import AppKit
-import LocalAuthentication
 import ServiceManagement
 import UniformTypeIdentifiers
 
@@ -111,10 +110,9 @@ struct SettingsView: View {
     @State private var moleUpdating = false
     @State private var engineUpdatePolicy: MoleCLI.EngineUpdatePolicy = .unavailable
     @State private var copiedConfig = false
-    @State private var touchIDStatus = "—"
-    @State private var touchIDEnabled = false
-    @State private var touchIDBusy = false
-    @State private var touchIDAvailable = false
+    @State private var helperStatus: HelperRegistrationStatus = .notRegistered
+    @State private var helperBusy = false
+    @State private var helperError: String?
 
     /// Drop-in MCP config for Claude Code / Cursor / Codex / Cline — they
     /// all share the same `{command, args}` stdio shape, so one snippet
@@ -164,13 +162,18 @@ struct SettingsView: View {
             .frame(width: 460, height: 440)
         }
         .onAppear {
-            refreshStatusLabels(); loadMoleVersion(); loadTouchIDStatus(); loadLaunchAtLogin()
+            refreshStatusLabels(); loadMoleVersion(); loadLaunchAtLogin()
+            loadHelperStatus()
             whitelistPatterns = MoleWhitelist.live.patterns()
             menuBarSuppressed = AppDelegate.shared?.menuBarSuppressedByCompatibilityGuard ?? false
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             fdaGranted = Privacy.hasFullDiskAccess()
             axTrusted = CleanScreen.inputLockPermitted()
+            // Approving the helper happens in System Settings, outside this
+            // app, so the row would otherwise still read "waiting for your
+            // approval" after the user came back having already granted it.
+            loadHelperStatus()
         }
     }
 
@@ -632,16 +635,17 @@ struct SettingsView: View {
                 footnote("Sends anonymous product analytics (PostHog) plus crash, hang, startup, update, and sampled performance diagnostics (Sentry): random install IDs, app and exact macOS build, CPU type, screens and features used, and fixed-name diagnostic milestones. Never screenshots, screen recordings, your file names, contents, user paths, URLs, or metrics. On by default; turn it off and both stop. Full list in TELEMETRY.md.")
             }
 
-            section("Touch ID for sudo", "touchid") {
-                infoRow("Status", touchIDStatus)
-                if touchIDAvailable {
-                    HStack {
-                        Spacer()
-                        if touchIDBusy { ProgressView().controlSize(.small).padding(.trailing, 4) }
-                        PillButton(title: touchIDEnabled ? "Disable" : "Enable", filled: false) { toggleTouchID() }
-                    }
+            section("Privileged helper", "lock.shield") {
+                infoRow("Status", helperStatusLabel)
+                HStack {
+                    Spacer()
+                    if helperBusy { ProgressView().controlSize(.small).padding(.trailing, 4) }
+                    PillButton(title: helperInstalled ? "Remove" : "Install", filled: false) { toggleHelper() }
                 }
-                footnote("Lets `sudo` in a terminal accept your fingerprint instead of a password — including `mo` commands you run yourself. It does NOT change Burrow's own admin prompts: those go through macOS authorization, which asks for your password regardless. Configured via `mo touchid` (pam_tid); turning it on or off needs your password once.")
+                if let helperError {
+                    footnote(helperError)
+                }
+                footnote("Runs Burrow's admin operations — scan, clean, optimize — through a small signed helper instead of a password-only prompt, so macOS can offer Touch ID. Installing it needs your approval once and grants no standing access: you're asked to authenticate for each operation you start. The helper can only perform those three operations — it cannot be asked to run anything else.")
             }
 
             section("Mole engine", "shippingbox") {
@@ -709,51 +713,88 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Touch ID for sudo
+    // MARK: - Privileged helper
 
-    /// Whether this Mac actually has a Touch ID sensor. `mo touchid status`
-    /// only reports configured-vs-not (never hardware presence), so we ask
-    /// LocalAuthentication directly — biometryType is .touchID only on Macs
-    /// with the sensor (set after a canEvaluatePolicy probe, even if no
-    /// finger is enrolled yet).
-    private func touchIDHardwarePresent() -> Bool {
-        let ctx = LAContext()
-        var err: NSError?
-        _ = ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &err)
-        return ctx.biometryType == .touchID
-    }
+    private var helperInstalled: Bool { helperStatus != .notRegistered }
 
-    private func loadTouchIDStatus() {
-        let available = touchIDHardwarePresent()
-        DispatchQueue.global(qos: .userInitiated).async {
-            let res = try? MoleCLI.run(args: ["touchid", "status"], timeout: 15)
-            // Strip ANSI colour codes Mole wraps the status line in before matching.
-            let out = Ansi.strip(res?.stdout ?? "").lowercased()
-            let enabled = out.contains("is enabled")
-            DispatchQueue.main.async {
-                touchIDAvailable = available
-                touchIDEnabled = enabled
-                touchIDStatus = !available ? "Not available on this Mac"
-                    : (out.isEmpty ? "Unknown" : (enabled ? "Enabled" : "Disabled"))
-            }
+    private var helperStatusLabel: String {
+        switch helperStatus {
+        case .enabled: return "Installed"
+        case .requiresApproval: return "Waiting for your approval in Login Items & Extensions"
+        case .notRegistered: return "Not installed"
         }
     }
 
-    private func toggleTouchID() {
-        guard !touchIDBusy else { return }
-        touchIDBusy = true
-        let cmd = touchIDEnabled ? "disable" : "enable"
+    private func loadHelperStatus() {
+        let status = PrivilegedHelperClient.shared.registrationStatus
+        DispatchQueue.main.async { helperStatus = status }
+    }
+
+    /// Watch for the approval landing.
+    ///
+    /// `register()` returns as soon as the request is filed, but the daemon
+    /// stays in `.requiresApproval` until the user allows it in System
+    /// Settings ▸ General ▸ Login Items & Extensions. That approval is
+    /// asynchronous and happens in another process, with no notification back
+    /// to us, so a one-shot read right after `register()` almost always
+    /// reports the pre-approval state and then never corrects itself.
+    ///
+    /// Polling for a bounded window is the whole fix. It stops as soon as the
+    /// status settles, and gives up rather than running forever if the user
+    /// walks away or dismisses the prompt.
+    private func pollHelperApproval(deadline: Date = Date().addingTimeInterval(90)) {
+        guard Date() < deadline else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            let status = PrivilegedHelperClient.shared.registrationStatus
+            helperStatus = status
+            guard status == .requiresApproval else { return }
+            pollHelperApproval(deadline: deadline)
+        }
+    }
+
+    /// Install or remove the daemon. Both directions can throw — macOS refuses
+    /// registration if the user declines, and we surface that rather than
+    /// leaving the row silently unchanged.
+    private func toggleHelper() {
+        guard !helperBusy else { return }
+        helperBusy = true
+        helperError = nil
+        let install = !helperInstalled
         DispatchQueue.global(qos: .userInitiated).async {
-            let code = MoleCLI.runElevated(args: ["touchid", cmd])
-            DispatchQueue.main.async {
-                touchIDBusy = false
-                loadTouchIDStatus()
-                if code != 0 {
-                    let alert = NSAlert()
-                    alert.messageText = NSLocalizedString("Couldn't update Touch ID for sudo", comment: "")
-                    alert.informativeText = String(format: NSLocalizedString("`mo touchid %@` didn't complete (the password prompt may have been cancelled). You can also run it in a terminal.", comment: ""), cmd)
-                    alert.runModalQuiet()
+            var failure: String?
+            do {
+                if install {
+                    try PrivilegedHelperClient.shared.register()
+                } else {
+                    try PrivilegedHelperClient.shared.unregister()
                 }
+            } catch {
+                // Show the real reason, not a shrug. The interesting failures
+                // here are all indistinguishable from each other in a generic
+                // message — a stale registration left by a previous build of
+                // the app, a signature the system won't accept, or the user
+                // declining — and the underlying code is what tells them
+                // apart. `kSMErrorAlreadyRegistered` in particular is
+                // actionable: the launchd job survives, bound to the old app
+                // identity, and has to be removed before a new install works.
+                let ns = error as NSError
+                let detail = "\(ns.domain) \(ns.code): \(ns.localizedDescription)"
+                if install {
+                    let stale = ns.domain == "SMAppServiceErrorDomain" && ns.code == 134
+                    failure = stale
+                        ? "A helper from an earlier build of Burrow is still registered. Remove Burrow under System Settings ▸ General ▸ Login Items & Extensions, then install again. (\(detail))"
+                        : "Couldn't install the helper — Burrow keeps using the password prompt. (\(detail))"
+                } else {
+                    failure = "Couldn't remove the helper. You can also turn it off in System Settings ▸ General ▸ Login Items & Extensions. (\(detail))"
+                }
+            }
+            let status = PrivilegedHelperClient.shared.registrationStatus
+            DispatchQueue.main.async {
+                helperBusy = false
+                helperError = failure
+                helperStatus = status
+                // Installing files the request; the user approves it elsewhere.
+                if install, status == .requiresApproval { pollHelperApproval() }
             }
         }
     }
