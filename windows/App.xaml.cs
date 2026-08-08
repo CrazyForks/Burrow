@@ -37,6 +37,9 @@ public partial class App : Application
                 services.AddSingleton<IRecycleBinAdapter, WindowsShellRecycleBinAdapter>();
                 services.AddSingleton<IDeletionReceiptStore, JsonDeletionReceiptStore>();
                 services.AddSingleton<ISafeDeletionService, RecycleBinDeletionService>();
+                services.AddSingleton<WindowsGpuPerformanceCounterProvider>();
+                services.AddSingleton<IGpuTelemetryProvider>(provider =>
+                    new GpuTelemetryBackoffProvider(provider.GetRequiredService<WindowsGpuPerformanceCounterProvider>()));
                 services.AddSingleton<ISystemTelemetryService, WindowsSystemTelemetryService>();
                 services.AddSingleton<ISystemTelemetryHistoryService, JsonSystemTelemetryHistoryService>();
                 services.AddSingleton<SystemTelemetrySamplerService>();
