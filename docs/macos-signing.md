@@ -249,7 +249,29 @@ Check that Homebrew’s live `Casks/burrow.rb` no longer contains `postflight`,
 `https://github.com/caezium/Burrow/releases/latest/download/appcast.xml`
 resolves to that feed.
 
-### 0.12.0 current release and symbol baseline
+### 0.13.0 current release and symbol baseline
+
+The current release was verified from its downloaded GitHub asset on August
+11, 2026. Tag `v0.13.0` points to
+`ef4f873b6a69dc98c135682f336ed87d98aa2692`; the ZIP has SHA-256
+`0464ce07c84d7d25aa50d8e0362879b9f63399a2ff3f7f3fc9b60841a9d95044`,
+and `appcast.xml` has SHA-256
+`515ef9f02e540b8d168972e2de06408f9a615004f464b1a35594c770dfb00bb5`.
+The extracted app reports version 0.13.0, build 25, bundle ID
+`dev.caezium.Burrow`, and Team ID `YGSM2722TZ`; strict nested-signature,
+designated-requirement, stapler, and Gatekeeper checks all pass — `spctl`
+reports `source=Notarized Developer ID`.
+
+The distributed binary UUIDs are
+`CD76E791-FCA0-3C9D-BDD1-7B2C177C5A42` (arm64) and
+`E1519C15-7B88-38F6-B8B9-624EB35BF3ED` (x86_64). The
+[tag workflow log](https://github.com/caezium/Burrow/actions/runs/31414169134)
+records those exact two UUIDs as uploaded Sentry debug companions, proving that
+the 0.13.0 dSYM matches the public release binary. The live Homebrew cask is
+also 0.13.0 with the same ZIP SHA, preserves quarantine, and contains no
+`postflight`, `xattr -cr`, or unsigned-build caveat.
+
+### 0.12.0 symbol baseline
 
 The current release was re-verified from its downloaded GitHub asset on August
 8, 2026. Tag `v0.12.0` points to
