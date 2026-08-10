@@ -191,13 +191,102 @@ final class OperationFlowTests: XCTestCase {
         guard case .finished(.failed) = flow.state else { return XCTFail("expected failed") }
     }
 
+    func testNonzeroPrivilegedCleanupFailsVisiblyAndNeverCompletesTheHUD() async throws {
+        var parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("burrow-operation-flow-cleanup-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        parent = URL(fileURLWithPath: try XCTUnwrap(
+            InvokingUserIdentity.canonicalPath(parent.path)), isDirectory: true)
+        let item = parent.appendingPathComponent("reviewed-cache")
+        try FileManager.default.createDirectory(at: item, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let snapshot = try CleanupSnapshot.capture(
+            list: CleanList(categories: [
+                .init(name: "Test", items: [
+                    .init(path: item.path, sizeBytes: 1, sizeText: "1B", itemCount: nil),
+                ]),
+            ], summaryTotalText: "1B", summaryItemCount: 1),
+            approvedRootURLs: [parent])
+        let plan = try snapshot.plan(selectedPaths: [item.path])
+
+        let port = FakeProcessPort(script: [.exited(ElevatedExitCode.boundaryCheckFailed)])
+        let center = OperationCenter()
+        let flow = makeFlow(port, center: center)
+        var operation = Self.cleanOp(elevated: true)
+        operation.cleanupPlan = plan
+        flow.start(operation)
+        await settle(flow)
+
+        guard case .finished(.failed(let message)) = flow.state else {
+            return XCTFail("a fail-closed cleanup exit must not become done")
+        }
+        // A refused boundary check means NOTHING was deleted, so the message
+        // must say so rather than implying a partial run.
+        XCTAssertTrue(message.contains("Nothing was cleaned"), message)
+        XCTAssertTrue(message.contains("Rescan"), message)
+        XCTAssertNil(flow.report, "a refused cleanup must not render the preview's summary")
+        XCTAssertEqual(center.ops.first?.phase, .failed)
+    }
+
+    /// A cleanup that ran and could not remove everything is a DIFFERENT
+    /// outcome from one that was refused before it started, and the two must
+    /// not share wording — one leaves the caches in place, the other doesn't.
+    func testPartialCleanupFailureReadsAsPartialNotRefused() async throws {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("burrow-flow-partial-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let canonicalParent = URL(fileURLWithPath: try XCTUnwrap(
+            InvokingUserIdentity.canonicalPath(parent.path)))
+        let item = canonicalParent.appendingPathComponent("reviewed-cache")
+        try FileManager.default.createDirectory(at: item, withIntermediateDirectories: false)
+        let snapshot = try CleanupSnapshot.capture(
+            list: CleanList(categories: [
+                .init(name: "Test", items: [
+                    .init(path: item.path, sizeBytes: 1, sizeText: "1B", itemCount: nil),
+                ]),
+            ], summaryTotalText: "1B", summaryItemCount: 1),
+            approvedRootURLs: [canonicalParent])
+        let plan = try snapshot.plan(selectedPaths: [item.path])
+
+        let flow = makeFlow(FakeProcessPort(script: [.exited(1)]))
+        var operation = Self.cleanOp(elevated: true)
+        operation.cleanupPlan = plan
+        flow.start(operation)
+        await settle(flow)
+
+        guard case .finished(.failed(let message)) = flow.state else {
+            return XCTFail("a nonzero cleanup exit must not become done")
+        }
+        XCTAssertTrue(message.contains("could not be removed"), message)
+        XCTAssertFalse(message.contains("Nothing was cleaned"), message)
+    }
+
+    /// This is about the DIRECT engine path, so it has to pin the no-conductor world: with a
+    /// conductor staged, `streamOverride` supplies an executable for a non-elevated `clean`
+    /// before `resolveMo` is ever consulted, and the unresolvable-engine branch under test is
+    /// never reached. It previously relied on the test host happening not to bundle one.
     func testMissingExecutableFailsBeforeSpawn() {
-        let port = FakeProcessPort(script: [])
-        let flow = OperationFlow<CleanReport>(process: port, hasFullDiskAccess: { true },
-                                              resolveMo: { _ in nil }, center: OperationCenter())
-        flow.start(Self.cleanOp())
-        guard case .finished(.failed) = flow.state else { return XCTFail("expected failed") }
-        XCTAssertTrue(port.specs.isEmpty)
+        ConductorBundleFixture.withConductor(present: false) {
+            let port = FakeProcessPort(script: [])
+            let flow = OperationFlow<CleanReport>(process: port, hasFullDiskAccess: { true },
+                                                  resolveMo: { _ in nil }, center: OperationCenter())
+            flow.start(Self.cleanOp())
+            guard case .finished(.failed) = flow.state else { return XCTFail("expected failed") }
+            XCTAssertTrue(port.specs.isEmpty)
+        }
+    }
+
+    func testElevatedRunFailsBeforeSpawnWhenInvokingAccountCannotBeResolved() {
+        let port = FakeProcessPort(script: [.exited(0)])
+        let flow = OperationFlow<CleanReport>(
+            process: port, hasFullDiskAccess: { true }, resolveMo: { _ in "/usr/bin/true" },
+            resolveInvokingUser: {
+                throw InvokingUserIdentity.ResolutionError.missingAccount(501)
+            }, center: OperationCenter())
+        flow.start(Self.cleanOp(elevated: true))
+        guard case .finished(.failed) = flow.state else { return XCTFail("expected fail closed") }
+        XCTAssertTrue(port.specs.isEmpty, "identity targets are derived before elevation")
     }
 }
 
@@ -249,27 +338,27 @@ final class SystemProcessPortTests: XCTestCase {
 
     // MARK: Auth-cancel classification — an engine rule, not view folklore
 
-    /// "osascript exits nonzero having produced nothing" used to be an
-    /// OperationFlow heuristic; the runner owns it now, as a pure rule.
+    /// Only AppleScript's canonical userCanceledErr is a cancellation.
     func testFinalEvent_classifiesAuthCancel() {
-        // The previously-untestable path: elevated, failed, silent.
         guard case .authCancelled = SystemProcessPort.finalEvent(
-            exitCode: 1, elevated: true, sawOutput: false) else {
-            return XCTFail("elevated + nonzero + no output = dismissed auth prompt")
+            exitCode: 1, elevated: true,
+            appleScriptStderr: "execution error: User canceled. (-128)") else {
+            return XCTFail("canonical -128 diagnostic = dismissed auth prompt")
         }
-        // Output means the run really happened — a real failure, not cancel.
         guard case .exited(1) = SystemProcessPort.finalEvent(
-            exitCode: 1, elevated: true, sawOutput: true) else {
-            return XCTFail("an elevated run that produced output failed on its own terms")
+            exitCode: 1, elevated: true, appleScriptStderr: "") else {
+            return XCTFail("silent root command failures remain failures")
         }
         // Un-elevated runs have no auth prompt to cancel.
         guard case .exited(2) = SystemProcessPort.finalEvent(
-            exitCode: 2, elevated: false, sawOutput: false) else {
+            exitCode: 2, elevated: false,
+            appleScriptStderr: "execution error: User canceled. (-128)") else {
             return XCTFail("no elevation, no auth-cancel")
         }
         // Success is success even when silent.
         guard case .exited(0) = SystemProcessPort.finalEvent(
-            exitCode: 0, elevated: true, sawOutput: false) else {
+            exitCode: 0, elevated: true,
+            appleScriptStderr: "execution error: User canceled. (-128)") else {
             return XCTFail("exit 0 is never a cancel")
         }
     }

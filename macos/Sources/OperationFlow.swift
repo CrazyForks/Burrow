@@ -28,6 +28,9 @@ struct ProcessSpec: Sendable, Equatable {
     var stdin: String?
     var elevated: Bool
     var timeout: TimeInterval?
+    var invokingUser: InvokingUserIdentity? = nil
+    var requiresCurrentBundle: Bool = false
+    var cleanupPlan: CleanupExecutionPlan? = nil
 }
 
 enum ProcessEvent: Sendable {
@@ -64,6 +67,7 @@ struct ToolOperation<Report: Sendable> {
     var gate: Gate = .none
     var elevated: Bool = false
     var timeout: TimeInterval? = nil
+    var cleanupPlan: CleanupExecutionPlan? = nil
     var reduce: @Sendable ([String]) -> Report
     /// Optional line → HUD detail mapping (clean/optimize use
     /// TaskReportText.line); nil shows the raw line.
@@ -130,6 +134,7 @@ final class OperationFlow<Report: Sendable>: ObservableObject {
     /// Resolves the mo executable; elevated runs use trusted locations only
     /// (never a PATH lookup a user-writable directory could shadow).
     private let resolveMo: (_ elevated: Bool) -> String?
+    private let resolveInvokingUser: () throws -> InvokingUserIdentity
     private let center: OperationCenter
 
     private var task: Task<Void, Never>?
@@ -162,10 +167,12 @@ final class OperationFlow<Report: Sendable>: ObservableObject {
          resolveMo: @escaping (_ elevated: Bool) -> String? = {
              $0 ? MoleCLI.trustedExecutable() : MoleCLI.findExecutable()
          },
+         resolveInvokingUser: @escaping () throws -> InvokingUserIdentity = InvokingUserIdentity.current,
          center: OperationCenter = .shared) {
         self.process = process
         self.hasFullDiskAccess = hasFullDiskAccess
         self.resolveMo = resolveMo
+        self.resolveInvokingUser = resolveInvokingUser
         self.center = center
     }
 
@@ -194,13 +201,35 @@ final class OperationFlow<Report: Sendable>: ObservableObject {
         case .path(let p): exe = p
         }
         guard let executable = exe else {
+            // Elevation resolves ONLY the sealed copy inside the app bundle —
+            // trustedExecutable() deliberately dropped the Homebrew fallback,
+            // so naming Homebrew here sent people to the one location that
+            // could never satisfy this. A missing bundled engine is fixed by
+            // reinstalling the app, which is what installCommand documents.
             state = .finished(.failed(op.elevated
-                ? "mo not found in a trusted location (Homebrew)" : "mo not found"))
+                ? "The bundled engine is missing. Reinstall Burrow to restore it: \(MoleCLI.installCommand)"
+                : "mo not found"))
             return
         }
 
+        let invokingUser: InvokingUserIdentity?
+        if op.elevated {
+            do { invokingUser = try resolveInvokingUser() }
+            catch {
+                state = .finished(.failed(error.localizedDescription))
+                return
+            }
+        } else {
+            invokingUser = nil
+        }
+        let requiresCurrentBundle: Bool
+        if case .mo = op.executable { requiresCurrentBundle = op.elevated }
+        else { requiresCurrentBundle = false }
         let spec = ProcessSpec(executable: executable, arguments: arguments,
-                               stdin: op.stdin, elevated: op.elevated, timeout: op.timeout)
+                               stdin: op.stdin, elevated: op.elevated, timeout: op.timeout,
+                               invokingUser: invokingUser,
+                               requiresCurrentBundle: requiresCurrentBundle,
+                               cleanupPlan: op.cleanupPlan)
         state = .running
         report = nil
         lastReportAt = .distantPast
@@ -249,17 +278,29 @@ final class OperationFlow<Report: Sendable>: ObservableObject {
                 case .exited(let code):
                     guard !self.cancelRequested else { return }
                     self.reactivateIfElevated(op)   // backstop: no-output runs
-                    self.report = op.reduce(lines)
                     self.rawLog = lines.joined(separator: "\n")
-                    self.state = .finished(.done(exit: code))
-                    if op.label != nil {
-                        // Replace the last streamed line with the parsed
-                        // result line where the op provides one — that's
-                        // what a completion notification shows.
-                        let detail = self.report.map { op.finalDetail?($0) ?? "" } ?? ""
-                        self.center.end(id, success: code == 0, detail: detail)
+                    if code == 0 {
+                        self.report = op.reduce(lines)
+                        self.state = .finished(.done(exit: code))
+                        if op.label != nil {
+                            // Replace the last streamed line with the parsed
+                            // result line where the op provides one — that's
+                            // what a completion notification shows.
+                            let detail = self.report.map { op.finalDetail?($0) ?? "" } ?? ""
+                            self.center.end(id, success: true, detail: detail)
+                        }
+                        self.captureTelemetryCompletion(result: "succeeded")
+                    } else {
+                        // A cleanup report may contain the preview's optimistic
+                        // summary even though the exact-tree guard stopped the
+                        // deletion. Do not render or notify with that summary.
+                        self.report = op.cleanupPlan == nil ? op.reduce(lines) : nil
+                        let message = Self.failureMessage(exitCode: code,
+                                                          isCleanup: op.cleanupPlan != nil)
+                        self.state = .finished(.failed(message))
+                        if op.label != nil { self.center.end(id, success: false, detail: message) }
+                        self.captureTelemetryCompletion(result: "failed")
                     }
-                    self.captureTelemetryCompletion(result: code == 0 ? "succeeded" : "failed")
                 case .authCancelled:
                     // Auth-cancel is classified by the runner now (#48 taxonomy),
                     // not by a view-level "elevated + nonzero + no output" guess.
@@ -298,6 +339,36 @@ final class OperationFlow<Report: Sendable>: ObservableObject {
         return command
     }
 
+    /// Turn an exit status into something a person can act on. The wrapper's
+    /// own refusals (124–127) all mean NOTHING ran, which is the opposite of a
+    /// partial delete, so they must never share wording with a command that
+    /// ran and failed partway.
+    private static func failureMessage(exitCode: Int32, isCleanup: Bool) -> String {
+        switch exitCode {
+        case ElevatedExitCode.boundaryCheckFailed:
+            return isCleanup
+                ? NSLocalizedString(
+                    "Nothing was cleaned: the reviewed items changed before the run started. Rescan before trying again.",
+                    comment: "")
+                : NSLocalizedString(
+                    "Nothing ran: the files Burrow verified changed before the operation started.",
+                    comment: "")
+        case ElevatedExitCode.logSinkUnavailable,
+             ElevatedExitCode.executableRefused,
+             ElevatedExitCode.launchFailed:
+            return NSLocalizedString(
+                "Nothing ran: Burrow could not verify the program it was about to run as an administrator.",
+                comment: "")
+        default:
+            return isCleanup
+                ? String(format: NSLocalizedString(
+                    "Some reviewed items could not be removed (exit %d). The run log lists each one.",
+                    comment: ""), exitCode)
+                : String(format: NSLocalizedString("Operation failed with exit status %d.", comment: ""),
+                         exitCode)
+        }
+    }
+
     private func captureTelemetryCompletion(result: String) {
         guard let telemetryFeature else { return }
         let duration = telemetryStartedAt.map { Date().timeIntervalSince($0) } ?? 0
@@ -334,6 +405,23 @@ extension ToolOperation where Report == TaskRunReport {
 
 // MARK: - Production adapter
 
+/// Why an elevated run never reached the authentication prompt. Distinct from
+/// `ValidatedElevatedCommand.ValidationError` because these two are decided by
+/// the caller's own state rather than by the filesystem.
+enum ElevatedSetupError: LocalizedError, Equatable {
+    case noInvokingUser
+    case staleCleanupPlan
+
+    var errorDescription: String? {
+        switch self {
+        case .noInvokingUser:
+            return "Burrow could not confirm which signed-in account started this operation."
+        case .staleCleanupPlan:
+            return "The reviewed items changed before the run started, so nothing was cleaned."
+        }
+    }
+}
+
 /// The streaming-op spawn mechanics: plain runs stream
 /// stdout+stderr through pipes; elevated runs go through ONE osascript auth
 /// prompt with output tailed from a temp log (`do shell script` doesn't
@@ -352,17 +440,24 @@ struct SystemProcessPort: ProcessPort {
             // silently drop lines — an intermittent CI failure that surfaced as
             // [] or ["a"] instead of ["a","b"].)
             let streamQ = DispatchQueue(label: "dev.caezium.burrow.opflow.stream")
-            var tailTimer: Timer?
-            var logHandle: FileHandle?
+            var tailTimer: DispatchSourceTimer?
             var killTimer: DispatchSourceTimer?
+            // Both of these belong to streamQ ALONE. The tail timer fires on
+            // the main run loop, so if it opened, read, or closed the handle
+            // itself it would be racing the termination handler doing the same
+            // three things — including a read against a descriptor the other
+            // side had already closed. The timer therefore only schedules work
+            // onto streamQ; ownership never leaves it.
+            var logHandle: FileHandle?      // streamQ only
+            var tailFinished = false        // streamQ only
 
             func emit(_ s: String) {                       // streamQ only
                 for line in splitter.ingest(Ansi.strip(s)) { cont.yield(.line(line)) }
             }
-            func finish(_ code: Int32) {                   // streamQ only
+            func finish(_ code: Int32, appleScriptStderr: String = "") { // streamQ only
                 for line in splitter.flush() { cont.yield(.line(line)) }
                 cont.yield(Self.finalEvent(exitCode: code, elevated: spec.elevated,
-                                           sawOutput: splitter.sawAnyLine))
+                                           appleScriptStderr: appleScriptStderr))
                 cont.finish()
             }
 
@@ -375,37 +470,96 @@ struct SystemProcessPort: ProcessPort {
                 // assert so the unsupported combo fails loudly rather than
                 // silently dropping the input if someone wires it up later.
                 assert(spec.stdin == nil, "elevated runs don't support stdin")
-                let safe = spec.arguments.map { $0.filter(\.isLetter) }.joined(separator: "-")
-                let logPath = NSTemporaryDirectory() + "burrow-op-\(safe).log"
-                FileManager.default.createFile(atPath: logPath, contents: Data())
-                let script = MoleCLI.elevatedScript(executable: spec.executable,
-                                                    args: spec.arguments, redirectTo: logPath)
+                // A refusal here is the single most confusing failure Burrow
+                // can produce — nothing runs, no prompt appears, and the exit
+                // status alone ("126") tells the user nothing about which
+                // check said no. Carry the reason into the transcript.
+                let command: ValidatedElevatedCommand
+                let logSink: PrivilegedLogSink
+                do {
+                    guard let invokingUser = spec.invokingUser else {
+                        throw ElevatedSetupError.noInvokingUser
+                    }
+                    command = try ValidatedElevatedCommand.prepare(
+                        executable: spec.executable, invokingUser: invokingUser,
+                        requireCurrentBundle: spec.requiresCurrentBundle)
+                    guard spec.cleanupPlan?.validateForLaunch() != false else {
+                        throw ElevatedSetupError.staleCleanupPlan
+                    }
+                    logSink = try PrivilegedLogSink.make()
+                } catch {
+                    let reason = (error as? LocalizedError)?.errorDescription
+                        ?? error.localizedDescription
+                    // A stale plan is a changed review, not a program we
+                    // couldn't verify; reporting it as the latter would send
+                    // the user looking for a signing problem they don't have.
+                    let code = (error as? ElevatedSetupError) == .staleCleanupPlan
+                        ? ElevatedExitCode.boundaryCheckFailed
+                        : ElevatedExitCode.executableRefused
+                    streamQ.async {
+                        emit(reason + "\n")
+                        finish(code)
+                    }
+                    return
+                }
+                let script = MoleCLI.elevatedScript(command: command,
+                                                    args: spec.arguments,
+                                                    logSink: logSink,
+                                                    cleanupPlan: spec.cleanupPlan)
                 t.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
                 t.arguments = ["-e", script]
                 t.standardOutput = outPipe
                 t.standardError = errPipe
 
-                let handle = FileHandle(forReadingAtPath: logPath)
-                logHandle = handle
-                let timer = Timer(timeInterval: 0.3, repeats: true) { _ in
-                    guard let h = handle else { return }
+                // The tail poll runs on streamQ, NOT the main run loop.
+                //
+                // The root shell unlinks its sink from a trap on exit and only
+                // gives the app a short fixed window to get a descriptor first.
+                // Polling from the main run loop meant a busy or modal UI could
+                // miss that window entirely and lose the whole transcript — and
+                // a clean whose output vanished used to render as a successful
+                // run that freed nothing. A background queue cannot be starved
+                // by the UI, and it puts every access to `logHandle` on the one
+                // queue that owns it.
+                let tail = DispatchSource.makeTimerSource(queue: streamQ)
+                tail.schedule(deadline: .now(), repeating: .milliseconds(50))
+                tail.setEventHandler {
+                    // A tick can still be in flight after the final tail has
+                    // been read and the handle closed; serving it would read a
+                    // closed descriptor.
+                    guard !tailFinished else { return }
+                    if logHandle == nil { logHandle = logSink.openForReading() }
+                    guard let h = logHandle else { return }
                     let data = h.readDataToEndOfFile()
-                    guard !data.isEmpty, let s = String(data: data, encoding: .utf8) else { return }
-                    streamQ.async { emit(s) }
+                    guard !data.isEmpty else { return }
+                    // Lossy decode, never the failable initializer: a read can
+                    // end mid-UTF-8-sequence, and `String(data:encoding:)`
+                    // returning nil there used to discard the whole chunk —
+                    // losing entire lines of a privileged run's transcript.
+                    emit(String(decoding: data, as: UTF8.self))
                 }
-                RunLoop.main.add(timer, forMode: .common)
-                tailTimer = timer
+                tail.resume()
+                tailTimer = tail
 
                 t.terminationHandler = { proc in
                     killTimer?.cancel()
-                    DispatchQueue.main.async { tailTimer?.invalidate() }
                     streamQ.async {
+                        tail.cancel()
+                        // Claim the handle before the final read so a timer
+                        // tick queued behind this block cannot touch it.
+                        tailFinished = true
+                        if logHandle == nil { logHandle = logSink.openForReading() }
                         if let h = logHandle {                  // last tail of the log
                             let data = h.readDataToEndOfFile()
-                            if !data.isEmpty, let s = String(data: data, encoding: .utf8) { emit(s) }
+                            if !data.isEmpty { emit(String(decoding: data, as: UTF8.self)) }
                             try? h.close()
+                            logHandle = nil
                         }
-                        finish(proc.terminationStatus)
+                        let stderr = String(
+                            decoding: errPipe.fileHandleForReading.readDataToEndOfFile(),
+                            as: UTF8.self)
+                        _ = outPipe.fileHandleForReading.readDataToEndOfFile()
+                        finish(proc.terminationStatus, appleScriptStderr: stderr)
                     }
                 }
             } else {
@@ -422,21 +576,25 @@ struct SystemProcessPort: ProcessPort {
             }
 
             cont.onTermination = { @Sendable _ in
-                DispatchQueue.main.async { tailTimer?.invalidate() }
+                tailTimer?.cancel()
                 if t.isRunning { t.terminate() }
             }
 
             do {
                 try t.run()
-                if !spec.elevated {
-                    // Process inherits duplicated write descriptors during
-                    // spawn; the parent must close its copies so the readers
-                    // observe EOF after the child exits. Keeping these handles
-                    // open can strand the stream forever after a timeout even
-                    // though terminate() successfully killed the child.
-                    try? outPipe.fileHandleForWriting.close()
-                    try? errPipe.fileHandleForWriting.close()
-                }
+                // Process inherits duplicated write descriptors during spawn;
+                // the parent must close its copies so the readers observe EOF
+                // after the child exits. Keeping these handles open can strand
+                // the stream forever after a timeout even though terminate()
+                // successfully killed the child.
+                //
+                // Both routes, not just the unelevated one: the elevated branch
+                // hands the SAME two pipes to osascript, and its termination
+                // handler ends with readDataToEndOfFile on each — a read that
+                // only returns once every write descriptor is gone, this
+                // parent's included.
+                try? outPipe.fileHandleForWriting.close()
+                try? errPipe.fileHandleForWriting.close()
                 // Armed only after a successful spawn (a suspended source
                 // must never be cancelled/deallocated).
                 if let timeout = spec.timeout {
@@ -458,7 +616,8 @@ struct SystemProcessPort: ProcessPort {
                         group.enter()
                         DispatchQueue.global(qos: .utility).async {
                             while case let d = fh.availableData, !d.isEmpty {
-                                if let s = String(data: d, encoding: .utf8) { streamQ.sync { emit(s) } }
+                                let s = String(decoding: d, as: UTF8.self)
+                                streamQ.sync { emit(s) }
                             }
                             group.leave()
                         }
@@ -475,13 +634,12 @@ struct SystemProcessPort: ProcessPort {
         }
     }
 
-    /// The one final-event rule (issue #48's error taxonomy): an elevated
-    /// run that exits nonzero having produced NOTHING is a dismissed auth
-    /// prompt, not a command failure. The predicate itself lives in
-    /// `AuthCancel` so the streaming runner and the one-shot
-    /// `SystemPrivilegeBroker` share one source of truth. Pure → table-tested.
-    static func finalEvent(exitCode: Int32, elevated: Bool, sawOutput: Bool) -> ProcessEvent {
-        if AuthCancel.isAuthCancelled(elevated: elevated, exitCode: exitCode, sawOutput: sawOutput) {
+    /// Both streaming and one-shot elevation require AppleScript's canonical
+    /// -128 diagnostic. A silent nonzero root command remains a real failure.
+    static func finalEvent(exitCode: Int32, elevated: Bool,
+                           appleScriptStderr: String) -> ProcessEvent {
+        if AuthCancel.isAuthCancelled(elevated: elevated, exitCode: exitCode,
+                                      appleScriptStderr: appleScriptStderr) {
             return .authCancelled
         }
         return .exited(exitCode)
