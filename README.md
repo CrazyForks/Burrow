@@ -7,7 +7,7 @@
 > If you like Mole and want to fund `mo`'s development — **buy mole.fit ($19)**.
 
 <div align="center">
-  <h1>Burrow</h1>
+  <h1>burrow</h1>
   <p><em>🐹 The open-source system companion for your Mac — clean, uninstall, analyze, optimize, and monitor, built for you and your AI agents.</em></p>
 </div>
 
