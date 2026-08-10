@@ -249,7 +249,24 @@ Check that Homebrew’s live `Casks/burrow.rb` no longer contains `postflight`,
 `https://github.com/caezium/Burrow/releases/latest/download/appcast.xml`
 resolves to that feed.
 
-### 0.13.0 current release and symbol baseline
+### 0.14.0 current release and symbol baseline
+
+The current release was verified from its downloaded GitHub asset on August
+11, 2026. Tag `v0.14.0` points to
+`dfd59197f0a4e304f90ddc704ed412be8ea3cdc0`; the ZIP has SHA-256
+`3e5d5d36ccb6292ff69451a2f88a748f6f8a16687bb1c1bae2e013723062ef2d`,
+and `appcast.xml` has SHA-256
+`5b91fd40e5c78b40bc5f2c2d43e43246627f550f53b1391cc9632cb28059fb4d`.
+The extracted app reports version 0.14.0, build 26, bundle ID
+`dev.caezium.Burrow`, and Team ID `YGSM2722TZ`; strict nested-signature,
+designated-requirement, stapler, and Gatekeeper checks all pass — `spctl`
+reports `source=Notarized Developer ID`.
+
+The distributed binary UUIDs are
+`020F4D5C-1729-3696-BE0C-E7E11204D577` (arm64) and
+`C725E50F-AB33-3BD8-A40D-C9C3B229F9B5` (x86_64).
+
+### 0.13.0 symbol baseline
 
 The current release was verified from its downloaded GitHub asset on August
 11, 2026. Tag `v0.13.0` points to

@@ -132,13 +132,36 @@
 <header class="hero page">
   <h1>Changelog</h1>
   <p>Every version at a glance, what it added, changed, and fixed. Full notes for each live on GitHub.</p>
-  <p class="count">25 releases · latest 0.13.0 · <a href="https://github.com/caezium/Burrow/releases" target="_blank" rel="noopener">GitHub releases ↗</a></p>
+  <p class="count">26 releases · latest 0.14.0 · <a href="https://github.com/caezium/Burrow/releases" target="_blank" rel="noopener">GitHub releases ↗</a></p>
 </header>
 
 <main class="page">
+    <article class="entry" id="v0.14.0">
+      <div class="ver-col">
+        <h2 class="ver">0.14.0<span class="latest">latest</span></h2>
+        <span class="date mono">Aug 11, 2026</span>
+        <a class="gh mono" href="https://github.com/caezium/Burrow/releases/tag/v0.14.0" target="_blank" rel="noopener">full notes ↗</a>
+      </div>
+      <div class="sbody">
+        <p class="lead">The Touch ID helper now offers itself instead of hiding in Settings, and the reviewed clean says what it removed instead of finishing silently.</p>
+        <div class="sblock">
+          <div class="slabel mono">added</div>
+          <ul class="slist">
+            <li><b>Burrow offers the privileged helper.</b> The Touch ID helper shipped in 0.13.0 behind a single button in <b>Settings ▸ Advanced</b>, and nothing pointed anyone at it — upgraders learned about it from the release notes, fresh installs not at all. It is now offered from an ambient banner, at most one notice at a time, and the dismissal persists. (<a href="https://github.com/caezium/Burrow/pull/379" target="_blank" rel="noopener">#379</a>)</li>
+          </ul>
+        </div>
+        <div class="sblock">
+          <div class="slabel mono">fixed</div>
+          <ul class="slist">
+            <li><b>The reviewed clean reports what it removed.</b> It deleted exactly what was ticked and then looked like it had done nothing — that path deletes each reviewed path with <code>find</code>, which succeeds silently, leaving the result screen with no output to show. It now reports what it was authorized to remove, which the run only claims after confirming every planned path is gone. (<a href="https://github.com/caezium/Burrow/pull/380" target="_blank" rel="noopener">#380</a>)</li>
+          </ul>
+        </div>
+      </div>
+    </article>
+
     <article class="entry" id="v0.13.0">
       <div class="ver-col">
-        <h2 class="ver">0.13.0<span class="latest">latest</span></h2>
+        <h2 class="ver">0.13.0</h2>
         <span class="date mono">Aug 11, 2026</span>
         <a class="gh mono" href="https://github.com/caezium/Burrow/releases/tag/v0.13.0" target="_blank" rel="noopener">full notes ↗</a>
       </div>
