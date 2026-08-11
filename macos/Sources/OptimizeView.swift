@@ -144,12 +144,28 @@ struct OptimizeView: View {
                 String(format: NSLocalizedString("%d areas refreshed", comment: ""), report.groups.count)
             }
         }
+        // "Maintenance", not the reducer's clean-side default — this titles the card on BOTH
+        // optimize screens: the finished receipt and the live one, which lands on
+        // TaskReportView whenever the ticker recognizes nothing (i.e. every NDJSON run today).
+        let title = BurrowStreamReport.groupTitle(forMo: args)
         return ToolOperation(label: label, arguments: args, gate: gate, elevated: elevated,
+                             // The bundled engine streams NDJSON (both `runOptimize` and
+                             // `runPreview` below go through the same conductor `--stream` path
+                             // clean does) — reduce with BurrowStreamReport, not the old
+                             // human-text parseTaskReport, or every run reads back an empty
+                             // report and "0 areas refreshed". See BurrowStreamReport.
+                             //
+                             // TaskTicker.reduce still speaks only the old ➤/→ text grammar, so
+                             // the live ticker finds nothing on these NDJSON lines — that's the
+                             // view's existing "ticker found nothing it recognizes" fallback
+                             // (below, in `body`), not a new gap: it degrades to the raw
+                             // TaskReportView instead of an empty panel, same as any other format
+                             // drift.
                              reduce: { lines in
-                                 let (groups, summary) = parseTaskReport(lines)
+                                 let (groups, summary) = BurrowStreamReport.reduce(lines, title: title)
                                  return (groups, summary, TaskTicker.reduce(lines))
                              },
-                             hudLine: { TaskReportText.line($0) },
+                             hudLine: { BurrowStreamReport.hudLine($0) },
                              notifyOnEnd: notify,
                              finalDetail: finalDetail)
     }

@@ -164,9 +164,83 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
         tap_step = workflow[tap_start:]
 
-        self.assertIn("persist-credentials: false", workflow)
-        self.assertIn("export GIT_CONFIG_COUNT=1", workflow)
+        # `persist-credentials: false` has to be on the CHECKOUT, not merely somewhere in the
+        # file — a bare `assertIn` over the whole workflow passes even if the flag drifts onto
+        # an unrelated step and the checkout starts leaving GITHUB_TOKEN in .git/config for the
+        # tap push to reuse. Pin it to the one `actions/checkout` step this job runs.
+        checkout_start = workflow.index("- uses: actions/checkout@")
+        checkout_step = workflow[checkout_start : workflow.index("- name:", checkout_start)]
+        self.assertIn("persist-credentials: false", checkout_step)
+        self.assertEqual(
+            workflow.count("- uses: actions/checkout@"),
+            1,
+            "a second checkout step would need its own persist-credentials assertion",
+        )
+        # The tap is `git clone`d rather than checked out, so it never inherits the runner's
+        # credentials; what it must not do is install a global rewrite that would.
         self.assertNotIn("git config --global url.", workflow)
+        self.assertNotIn("actions/checkout@", tap_step)
+
+        # This used to assert `export GIT_CONFIG_COUNT=1` in the build step: a
+        # process-scoped URL rewrite, so ENGINE_PAT could reach the private
+        # burrow-engine crate during the conductor's cargo build without becoming
+        # the credential the later Homebrew push used. The repoint deleted the
+        # conductor, and burrow-engine's own Cargo.toml has no git dependencies,
+        # so there is nothing left in the build that needs to authenticate to
+        # GitHub. Not having the token in the step at all is strictly stronger
+        # than scoping the rewrite, so that is what gets pinned now.
+        build_start = workflow.index("- name: Build (Release)")
+        build_end = workflow.index(
+            "- name: Verify the bundled engine made it into the app"
+        )
+        build_step = workflow[build_start:build_end]
+        self.assertNotIn(
+            "ENGINE_PAT: ${{ secrets.ENGINE_PAT }}",
+            build_step,
+            "the release build must not receive the engine token at all",
+        )
+        self.assertNotIn("CARGO_NET_GIT_FETCH_WITH_CLI", build_step)
+
+        # Neither the checkout nor the tap push may receive the engine token — INCLUDING by
+        # inheritance, which a per-step search cannot see. A workflow- or job-level `env:` block
+        # is handed to every step in the job, so ENGINE_PAT declared there would reach the tap
+        # push while each step's own text stayed clean. Step-level `env:` sits at 8 spaces here;
+        # anything shallower is an outer block.
+        for name, step in (("checkout", checkout_step), ("tap push", tap_step)):
+            self.assertNotIn(
+                "ENGINE_PAT", step, f"the {name} step must not see the engine token"
+            )
+        self.assertEqual(
+            workflow.count("ENGINE_PAT: ${{ secrets.ENGINE_PAT }}"),
+            1,
+            "the engine token belongs to the fetch step alone",
+        )
+        lines = workflow.splitlines()
+        for i, line in enumerate(lines):
+            stripped = line.lstrip()
+            indent = len(line) - len(stripped)
+            if stripped != "env:" or indent >= 8:
+                continue  # step-scoped: reaches only its own step
+            # An outer `env:` IS inherited by every step in the job, so what matters is
+            # whether it carries the token — not that it exists. A job-level block of
+            # ordinary config (EXPECTED_TEAM_ID) is fine and release.yml has one.
+            body = []
+            for nxt in lines[i + 1 :]:
+                if nxt.strip() and (len(nxt) - len(nxt.lstrip())) <= indent:
+                    break
+                body.append(nxt)
+            self.assertNotIn(
+                "ENGINE_PAT",
+                "\n".join(body),
+                "an inherited workflow- or job-level `env:` reaches every step, including "
+                f"the tap push — keep the engine token step-scoped: {body!r}",
+            )
+
+        # ENGINE_PAT survives only in the fetch step, where every use is scoped
+        # to one `git -c` invocation that writes no config anywhere.
+        for line in workflow.splitlines():
+            if "insteadOf" in line:
+                self.assertIn('git -c "url.', line)
         self.assertIn(
             'export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/burrow-tap-gitconfig"',
             tap_step,

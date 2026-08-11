@@ -38,10 +38,21 @@ final class OperationFlowTests: XCTestCase {
     }
 
     /// Canned dry-run output in mo's report shape (parseTaskReport-compatible).
+    // The human-text output the `cleanOp()` fixture's `parseTaskReport` reducer consumes.
     static let cannedClean: [ProcessEvent] = [
         .line("➤ Developer tools"),
         .line("  → npm cache, 191.8MB"),
         .line("Potential space: 383.8MB | Items: 372 | Categories: 20"),
+        .exited(0),
+    ]
+
+    // The engine's `clean --stream` NDJSON preview, which the `moleStream(...)` op's
+    // BurrowStreamReport reducer consumes. A dry-run done carries `would_free_human` →
+    // summary.space (no freeChange), so the completion line reads "Cleaned 383.8MB · 372 items"
+    // — same summary the old human-text "Potential space" preview produced.
+    static let cannedCleanStream: [ProcessEvent] = [
+        .line(#"{"event":"would_remove","path":"/Users/x/Library/Caches/npm cache","bytes":201129000}"#),
+        .line(#"{"event":"done","dry_run":true,"would_free_bytes":402438000,"would_free_human":"383.8MB","count":372}"#),
         .exited(0),
     ]
 
@@ -166,7 +177,7 @@ final class OperationFlowTests: XCTestCase {
     // and the parsed summary replaces the last streamed line as the final
     // detail — that's the body a completion notification carries.
     func testNotifyOnEnd_andFinalDetail_reachOperationCenter() async throws {
-        let port = FakeProcessPort(script: Self.cannedClean)
+        let port = FakeProcessPort(script: Self.cannedCleanStream)
         let center = OperationCenter()
         let flow = OperationFlow<TaskRunReport>(process: port, hasFullDiskAccess: { true },
                                                 resolveMo: { _ in "/usr/local/bin/mo" }, center: center)
@@ -288,20 +299,134 @@ final class OperationFlowTests: XCTestCase {
         guard case .finished(.failed) = flow.state else { return XCTFail("expected fail closed") }
         XCTAssertTrue(port.specs.isEmpty, "identity targets are derived before elevation")
     }
+
+    // MARK: - A routing switch must not change destructive semantics (the §2 bug, fallback half)
+    //
+    // `streamOverride` returning nil (the streaming switch off, or no conductor bundled) used to
+    // mean the fallback spawn sent `op.arguments` straight through, untranslated. Once
+    // `MoleCLI.bundledExecutable()` became part of `resolveMo`'s resolution chain, that fallback
+    // started resolving the SAME bundled engine the conductor branch would have — so the switch
+    // stopped being a transport-only decision and started being able to flip a live clean into a
+    // silent no-op. These pin that the fallback branch now translates whenever it resolves the
+    // bundled engine, and does NOT translate when it resolves anything else.
+    //
+    // Both therefore have to REACH that branch, and two deliberate acts are what get them there.
+    // `bundledExecutableOverride` is what lets the fallback recognise a bundled engine at all —
+    // it short-circuits `MoleCLI.bundledExecutable()` before the shared lookup, so it does not
+    // also make a conductor "bundled" (that is `BurrowConductor.resourceDirectory`'s seam). And
+    // turning the documented `BurrowStreamViaConductor` kill switch off is what stops
+    // `streamOverride` answering first: at its shipped default (ON for clean/optimize), a test
+    // host that HAD staged a Resources/burrow would spawn the CONDUCTOR's
+    // `["clean", "--apply", "--stream"]` instead, whatever `resolveMo` was told to return. The
+    // switch off with an engine still bundled is exactly the production configuration these two
+    // describe; without it both tests could silently assert about the branch they mean to bypass.
+
+    func testFallbackPath_stillTranslatesArgv_whenResolveMoFindsTheBundledEngine() async throws {
+        MoleCLI.bundledExecutableOverride = "/fake/bundled/burrow"
+        defer { MoleCLI.bundledExecutableOverride = nil }
+        UserDefaults.standard.set(false, forKey: "BurrowStreamViaConductor")
+        defer { UserDefaults.standard.removeObject(forKey: "BurrowStreamViaConductor") }
+        let port = FakeProcessPort(script: Self.cannedCleanStream)
+        let flow = OperationFlow<TaskRunReport>(process: port, hasFullDiskAccess: { true },
+                                                resolveMo: { _ in "/fake/bundled/burrow" },
+                                                center: OperationCenter())
+        // A live real clean — mo-style, no --dry-run — is exactly the destructive case: reaching
+        // the engine without --apply would silently no-op it (the §2 bug).
+        flow.start(.moleStream(["clean"], elevated: true, label: "Cleaning caches"))
+        await settle(flow)
+        let spec = try XCTUnwrap(port.specs.first)
+        XCTAssertEqual(spec.executable, "/fake/bundled/burrow")
+        XCTAssertEqual(spec.arguments, ["clean", "--apply"],
+                       "a live mo-style run that falls through to the (still bundled-engine) " +
+                       "direct path must gain --apply just like the conductor path would, or a " +
+                       "real clean silently no-ops against the engine's dry-run default")
+        XCTAssertFalse(spec.arguments.contains("--stream"),
+                       "and it must be the DIRECT spawn being asserted: --stream is the " +
+                       "conductor transport, so its presence means this never reached the fallback")
+    }
+
+    func testFallbackPath_leavesArgvUntranslated_whenResolveMoFindsAnExternalMo() async throws {
+        // The override is set (so `bundledExecutable()` resolves to something) but `resolveMo`
+        // deliberately returns a DIFFERENT path — the "bundle itself is missing, Homebrew has a
+        // real mo" case. That binary speaks mo's own convention, so translating it would turn
+        // this elevated PREVIEW into a live delete instead — the dangerous direction.
+        MoleCLI.bundledExecutableOverride = "/fake/bundled/burrow"
+        defer { MoleCLI.bundledExecutableOverride = nil }
+        UserDefaults.standard.set(false, forKey: "BurrowStreamViaConductor")
+        defer { UserDefaults.standard.removeObject(forKey: "BurrowStreamViaConductor") }
+        let port = FakeProcessPort(script: Self.cannedClean)
+        let flow = OperationFlow<TaskRunReport>(process: port, hasFullDiskAccess: { true },
+                                                resolveMo: { _ in "/opt/homebrew/bin/mo" },
+                                                center: OperationCenter())
+        flow.start(.moleStream(["clean", "--dry-run"], elevated: true, label: "Scanning caches"))
+        await settle(flow)
+        let spec = try XCTUnwrap(port.specs.first)
+        XCTAssertEqual(spec.executable, "/opt/homebrew/bin/mo")
+        XCTAssertEqual(spec.arguments, ["clean", "--dry-run"],
+                       "a genuine external mo fallback must keep mo-style argv untouched — " +
+                       "translating it would turn a preview into a live delete on that binary")
+    }
 }
 
 // MARK: - Production adapter against real (tiny) processes
 
 final class SystemProcessPortTests: XCTestCase {
-    private func run(_ spec: ProcessSpec) async -> (lines: [String], exit: Int32?) {
-        var lines: [String] = []
-        var exit: Int32?
-        for await e in SystemProcessPort().events(spec) {
-            switch e {
-            case .line(let l): lines.append(l)
-            case .exited(let c): exit = c
-            case .authCancelled: XCTFail("un-elevated specs never classify as auth-cancel")
+    /// What the stream produced, filled from the consuming task so the deadline
+    /// branch can report how far the run actually got.
+    private actor Collected {
+        private(set) var lines: [String] = []
+        private(set) var exit: Int32?
+        private(set) var sawAuthCancel = false
+        func append(_ line: String) { lines.append(line) }
+        func exited(_ code: Int32) { exit = code }
+        func authCancelled() { sawAuthCancel = true }
+    }
+
+    /// Consume the stream, but never for longer than `deadline`.
+    ///
+    /// These tests drive real processes and real pipes, so a bug in the runner
+    /// shows up as a test that never returns — which cost one CI run half an
+    /// hour of silence before it was cancelled, with a single "started" line to
+    /// show for it. A bounded wait turns that into a failure that says how far
+    /// the run got; SystemProcessPort's own stderr breadcrumbs say why.
+    private func run(_ spec: ProcessSpec, deadline: TimeInterval = 15,
+                     file: StaticString = #filePath,
+                     line: UInt = #line) async -> (lines: [String], exit: Int32?) {
+        let collected = Collected()
+        let stream = SystemProcessPort().events(spec)
+        let started = Date()
+        let finished = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                for await e in stream {
+                    switch e {
+                    case .line(let l): await collected.append(l)
+                    case .exited(let c): await collected.exited(c)
+                    case .authCancelled: await collected.authCancelled()
+                    }
+                }
+                return true
             }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(deadline * 1_000_000_000))
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+        let lines = await collected.lines
+        let exit = await collected.exit
+        if !finished {
+            XCTFail("""
+                    the stream never finished: \(spec.executable) \(spec.arguments.joined(separator: " ")) \
+                    still had not produced a terminal event after \
+                    \(String(format: "%.1f", Date().timeIntervalSince(started)))s \
+                    (timeout \(spec.timeout.map { "\($0)s" } ?? "none"), \
+                    \(lines.count) line(s) so far: \(lines.prefix(4)))
+                    """, file: file, line: line)
+        }
+        if await collected.sawAuthCancel {
+            XCTFail("un-elevated specs never classify as auth-cancel", file: file, line: line)
         }
         return (lines, exit)
     }
@@ -330,10 +455,71 @@ final class SystemProcessPortTests: XCTestCase {
         XCTAssertNotEqual(r.exit, 0)
     }
 
+    /// The kill has to work on a child that SIGTERM can't touch, and the stream
+    /// has to finish even when the pipe's write end outlives that child.
+    ///
+    /// `trap '' TERM` makes the ignore-disposition survive the exec, so this
+    /// child cannot be terminated politely — only the escalation to SIGKILL
+    /// ends it. And depending on whether /bin/sh execs `sleep` or forks it, the
+    /// surviving `sleep` may still hold our stdout open after the shell is
+    /// dead, in which case EOF never arrives and only the readers' own bound
+    /// lets the run finish. Both shapes used to wedge the stream forever, which
+    /// in the app is a progress HUD that never comes back.
+    func testTimeoutFinishesEvenWhenTheChildIgnoresSIGTERM() async {
+        let started = Date()
+        let r = await run(ProcessSpec(executable: "/bin/sh",
+                                      arguments: ["-c", "trap '' TERM; sleep 10"],
+                                      stdin: nil, elevated: false, timeout: 0.3))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 10,
+                          "SIGTERM is ignored here: the SIGKILL escalation and the reader " +
+                          "bound must still end the run before the 10 s sleep does")
+        XCTAssertNotEqual(r.exit, 0, "a killed run never reports success")
+    }
+
     func testSpawnFailureYieldsExit127() async {
         let r = await run(ProcessSpec(executable: "/nonexistent/binary", arguments: [],
                                       stdin: nil, elevated: false, timeout: nil))
         XCTAssertEqual(r.exit, 127)
+    }
+
+    // MARK: Chunk seams — a 64KB read boundary must not corrupt a character
+
+    /// A pipe read ends wherever the kernel put it, so it can split a multi-byte
+    /// character in half. Decoding each read independently turns that one character
+    /// into U+FFFD on both sides of the seam — and engine output carries file paths,
+    /// which are routinely non-ASCII, so this is reachable rather than theoretical.
+    ///
+    /// Drives EVERY split point of a string mixing 1-, 2-, 3- and 4-byte sequences
+    /// rather than a hand-picked boundary: the interesting cuts are exactly the ones
+    /// a hand-written case would miss.
+    func testChunkSeam_everySplitPointReassemblesExactly() {
+        let text = "清理/Résumé 🎉 done\n"
+        let all = Array(text.utf8)
+        for cut in 0...all.count {
+            var out = ""
+            var carry: [UInt8] = []
+            for piece in [Array(all[0..<cut]), Array(all[cut...])] {
+                var bytes = carry
+                bytes.append(contentsOf: piece)
+                carry = SystemProcessPort.splitTrailingPartialSequence(&bytes)
+                if !bytes.isEmpty { out += String(decoding: bytes, as: UTF8.self) }
+            }
+            if !carry.isEmpty { out += String(decoding: carry, as: UTF8.self) }
+            XCTAssertEqual(out, text, "a read boundary at byte \(cut) corrupted the stream")
+        }
+    }
+
+    /// The carry must never outlive what it is for. Bytes that are not UTF-8 at all
+    /// have no continuation coming, so holding them back would stall the stream —
+    /// they decode to U+FFFD instead, which is the honest answer.
+    func testChunkSeam_malformedBytesAreNotHeldBack() {
+        var lone: [UInt8] = [0xFF]
+        XCTAssertEqual(SystemProcessPort.splitTrailingPartialSequence(&lone), [],
+                       "a malformed lead byte must decode, not wait forever")
+        var complete = Array("done\n".utf8)
+        XCTAssertEqual(SystemProcessPort.splitTrailingPartialSequence(&complete), [],
+                       "a buffer already ending on a boundary holds nothing back")
+        XCTAssertEqual(complete, Array("done\n".utf8), "and is left untouched")
     }
 
     // MARK: Auth-cancel classification — an engine rule, not view folklore

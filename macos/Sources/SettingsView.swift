@@ -128,6 +128,11 @@ struct SettingsView: View {
     @State private var moleUpdating = false
     @State private var engineUpdatePolicy: MoleCLI.EngineUpdatePolicy = .unavailable
     @State private var copiedConfig = false
+    // The "Touch ID for sudo" row this branch was hardening against the repointed engine
+    // ("unknown command: touchid" must not read as a false "Disabled") is gone entirely on
+    // main — #346 replaced the whole section with the privileged helper below, which asks
+    // macOS for authorization rather than shelling out to `mo touchid`. The engine-support
+    // guard has nothing left to guard, so it retires with the feature.
     @State private var helperStatus: HelperRegistrationStatus = .notRegistered
     @State private var helperBusy = false
     @State private var helperError: String?
@@ -704,8 +709,14 @@ struct SettingsView: View {
             }
             .id(Self.helperAnchor)
 
-            section("Mole engine", "shippingbox") {
+            section("Engine", "shippingbox") {
                 infoRow("Version", moleVersion)
+                // This branch had hidden the update button outright, because the bundled
+                // engine has no `update` arm and pressing it could only ever fail. Main's
+                // policy gate says the same thing more precisely: `.bundledWithApp` shows
+                // no button at all (the case the branch was fixing), and `.external` keeps
+                // it for a source build pointed at an engine outside the app bundle, which
+                // really can update itself.
                 if engineUpdatePolicy == .external {
                     HStack {
                         Spacer()
@@ -722,14 +733,23 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Mole engine
+    // MARK: - Engine
 
+    /// Show the engine's version WITH its product name ("burrow-engine 0.1.0"), not a bare
+    /// "v0.1.0". Two reasons: the bundled engine numbers itself on its own 0.x line, so a
+    /// lone 0.1.0 sitting a few rows under Burrow's own 0.11.x reads like the app is
+    /// misreporting itself; and this row can just as easily be showing a separately
+    /// installed mo on the 1.4x line, which the number alone gives no way to tell apart.
     private func loadMoleVersion() {
         DispatchQueue.global(qos: .userInitiated).async {
-            let v = MoleCLI.version()
+            let engine = MoleCLI.versionReport()
             let policy = MoleCLI.currentEngineUpdatePolicy
             DispatchQueue.main.async {
-                moleVersion = v.map { "v\($0)" } ?? "not found"
+                // Same fallback string, and the same localization, as `AppDelegate.showAboutPanel`
+                // — the two rows report the identical fact one panel apart, and only this one was
+                // hard-coded, so a zh build read "burrow-engine 0.1.0" in the About panel and a
+                // bare English "not found" in Settings.
+                moleVersion = engine?.display ?? NSLocalizedString("not found", comment: "")
                 engineUpdatePolicy = policy
             }
         }
@@ -745,15 +765,25 @@ struct SettingsView: View {
         }
     }
 
+    /// ONLY reachable for `.external` — the caller gates the button on the update policy, and
+    /// that gate is load-bearing rather than cosmetic. The bundled engine (post-repoint) has no
+    /// self-update command at all: `burrow-engine`'s `cli.rs` dispatch table has no `update`
+    /// arm, so it answers "unknown command: update". Running it there and reporting that as
+    /// "Update didn't complete, try running it in a terminal" would be actively misleading — a
+    /// terminal run hits the exact same bundled binary and fails the exact same way — and the
+    /// bundled copy can only change when Burrow itself does anyway (bundle-burrow.sh stages a
+    /// fresh one on every release). An external engine is a different animal: it lives outside
+    /// the app bundle, nothing about Burrow's Developer ID seal depends on it, and if it's a
+    /// separately installed mo then `mo update` is exactly the right thing to run.
     private func updateMole() {
         guard !moleUpdating else { return }
         moleUpdating = true
         DispatchQueue.global(qos: .userInitiated).async {
             let res = try? MoleCLI.run(args: ["update"], timeout: 600)
-            let newVersion = MoleCLI.version()
+            let newVersion = MoleCLI.versionReport()
             DispatchQueue.main.async {
                 moleUpdating = false
-                if let v = newVersion { moleVersion = "v\(v)" }
+                if let newVersion { moleVersion = newVersion.display }
                 let ok = (res?.exitCode ?? 1) == 0
                 let alert = NSAlert()
                 alert.messageText = NSLocalizedString(

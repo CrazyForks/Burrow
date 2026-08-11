@@ -99,11 +99,23 @@ struct SystemPrivilegeBroker: PrivilegeBroker {
         task.standardError = errPipe
         do {
             try task.run()
-            // Drain both pipes to EOF before reaping so neither can fill and
-            // wedge osascript; small output, so a blocking read is fine.
+            // Drain both pipes to EOF before reaping so neither can fill and wedge osascript.
+            // stderr goes on its own queue because draining it AFTER stdout does not deliver
+            // that promise: a child filling stderr's ~64KB buffer while stdout is still open
+            // deadlocks — we block reading stdout, it blocks writing stderr, and neither moves.
+            // osascript's output is small enough that this has never bitten, but the ordering
+            // was the hazard, not the volume. Same shape as SystemMoleProcess.capture.
+            //
+            // stdout is read but discarded: the auth-cancel rule below classifies on the -128
+            // in stderr, not on whether anything was printed. The `errQueue.sync {}` barrier
+            // after `waitUntilExit` is what makes reading `err` safe — it cannot run until the
+            // enqueued read has returned, so the drain being concurrent never races the use.
+            var err = Data()
+            let errQueue = DispatchQueue(label: "dev.caezium.burrow.broker.err")
+            errQueue.async { err = errPipe.fileHandleForReading.readDataToEndOfFile() }
             _ = outPipe.fileHandleForReading.readDataToEndOfFile()
-            let err = errPipe.fileHandleForReading.readDataToEndOfFile()
             task.waitUntilExit()
+            errQueue.sync {}
             let code = task.terminationStatus
             let stderr = String(decoding: err, as: UTF8.self)
             return AuthCancel.outcome(exitCode: code, appleScriptStderr: stderr)

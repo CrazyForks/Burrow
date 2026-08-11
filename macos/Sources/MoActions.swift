@@ -14,10 +14,64 @@
 //  of the code, not a discipline.
 //
 //  Deliberately pure: no Store, no Privacy, no AppKit — consent arrives
-//  as data in the gate, verdicts come out.
+//  as data in the gate, verdicts come out. Which BINARY a ticket will be
+//  spawned against arrives the same way, through `decide`'s `resolve` seam
+//  (production default: `EngineTarget.resolve`), because the argv a ticket
+//  carries is only correct relative to the program that will read it.
 //
 
 import Foundation
+
+// MARK: - Which binary: resolved once, carried on the ticket
+
+/// The binary a ticket will actually be spawned against, resolved ONCE at mint and carried on
+/// the ticket so the decision and the spawn cannot disagree.
+///
+/// Two different programs sit behind `mo` discovery and they read the SAME argv with opposite
+/// meanings. The bundled Rust engine previews by default and deletes on `--apply`; a legacy `mo`
+/// deletes by default and previews on `--dry-run` (verified against the installed mole 1.46.0:
+/// `libexec/bin/clean.sh` treats a bare `clean` as the live run and rejects an unknown `--apply`
+/// with exit 1). So "translate this ticket's argv?" is a question about WHICH FILE resolved, and
+/// it has to be answered by the same lookup that produces the path the spawn uses — resolving
+/// once to decide and again to spawn is precisely the disagreement that turns a preview into a
+/// deletion.
+struct EngineTarget: Equatable {
+    /// Absolute path to the resolved binary; nil when nothing resolved at all.
+    let path: String?
+    /// True ONLY when `path` is the engine sealed inside Burrow.app — the same path-identity
+    /// check `OperationFlow.start` makes before translating its fallback spawn. Anything else (a
+    /// Homebrew `mo`, the Go fork, an unresolved lookup) speaks mo's own convention as far as
+    /// this side can tell, so its argv is left exactly as the catalog spelled it.
+    let isBundledEngine: Bool
+
+    /// Nothing resolved: mo-style argv, and a spawn that fails cleanly. Engine argv is never sent
+    /// to a binary that could not be identified.
+    static let unresolved = EngineTarget(path: nil, isBundledEngine: false)
+
+    static func bundledEngine(_ path: String) -> EngineTarget {
+        EngineTarget(path: path, isBundledEngine: true)
+    }
+
+    /// Any resolved binary that is NOT the bundled engine. Named for the wire format it speaks
+    /// rather than for a product, because upstream `mo` and the MIT fork are both in here.
+    static func moStyle(_ path: String) -> EngineTarget {
+        EngineTarget(path: path, isBundledEngine: false)
+    }
+
+    /// Production resolution — the same pair of lookups `OperationFlow`'s `resolveMo` default
+    /// uses, so a ticket and a streamed operation land on the same file: an elevated run never
+    /// accepts a PATH hit (a user-writable directory could shadow the engine and be handed root),
+    /// everything else uses the cached discovery.
+    ///
+    /// When an engine IS bundled the two sides of the identity test are the same file by
+    /// construction, because `trustedExecutable()`/`findExecutable()` both consult
+    /// `bundledExecutable()` first — one resolver, so they cannot drift.
+    static func resolve(elevated: Bool) -> EngineTarget {
+        let resolved = elevated ? MoleCLI.trustedExecutable() : MoleCLI.findExecutable()
+        return EngineTarget(path: resolved,
+                            isBundledEngine: resolved != nil && resolved == MoleCLI.bundledExecutable())
+    }
+}
 
 // MARK: - What: the action catalog
 
@@ -78,13 +132,50 @@ enum MoAction: Equatable {
         }
     }
 
-    /// The match-preflight command (uninstall only): pin what mo's matcher
-    /// resolves BEFORE answering its prompts. `--dry-run` changes nothing
+    /// The match pre-flight (uninstall only): the policy AND the probe that satisfies it, as one
+    /// value, so nothing downstream can hold one without the other. It pins what the resolved
+    /// binary's matcher resolves BEFORE answering its prompts. `--dry-run` changes nothing
     /// and exits at its prompt on stdin EOF.
-    var preflightCommand: ActionCommand? {
+    ///
+    /// nil for every other action — only uninstall has a pre-flight — and that is the ONLY nil
+    /// this returns. Either both halves or neither: a caller that got a policy back could never be
+    /// handed a missing probe, because the two are built here, together, from one pattern match.
+    ///
+    /// Built from mo-style argv, same as every other command here, and translated for the same
+    /// reason and under the same condition `mint` translates: only when `target` IS the bundled
+    /// engine. The untranslated mo spelling is already the read-only one — `["uninstall",
+    /// "--dry-run", <apps>]` is what a legacy `mo` documents and what its `uninstall.sh` reads —
+    /// so a probe against that binary needs no translation and must not receive one.
+    ///
+    /// `mint` calls this with the target it resolved and hangs the result on the ticket, so the
+    /// probe and the run it guards are guaranteed to be the same binary. A probe that read one
+    /// binary's plan while the apply went to another would be a guard in name only.
+    ///
+    /// **`assertDryRun` is what makes the probe read-only, and it is the one caller that asks for
+    /// it.** Translation alone drops `--dry-run` and lands on the engine's dry-run DEFAULT, which
+    /// is right for every ticket `mint` builds — a preview the user asked for is allowed to inherit
+    /// the default, because the worst a wrong default does there is show the wrong screen. This is
+    /// not that. The pre-flight runs before the user's consent has been acted on, and since
+    /// burrow-engine `df9ea3f` the command it probes with removes the `.app` itself. Flagless, its
+    /// non-destructiveness was an assumption about the engine that nothing on either side asserted;
+    /// with the flag it is a fact on the argv, and `wants_apply` resolves toward the dry run even on
+    /// the engine's internal seams that never see argv validation. It cannot collide with `--apply`:
+    /// `engineArgv` appends at most one of the two (see its doc), and the engine refuses the pair at
+    /// exit 2 if anything ever did.
+    ///
+    /// `--permanent` is deliberately absent — the mo argv here is the PREVIEW spelling, so the probe
+    /// asks what would be removed and never how. A flag that only distinguishes Trash from outright
+    /// deletion has nothing to say about a run that deletes neither.
+    func matchPreflight(on target: EngineTarget) -> ActionPreflight? {
         guard case .uninstall(let apps, _) = self else { return nil }
-        return ActionCommand(args: ["uninstall", "--dry-run"] + apps,
-                             stdin: "", timeout: 120, elevated: false)
+        let moArgs = ["uninstall", "--dry-run"] + apps
+        return ActionPreflight(
+            policy: .verifyUninstallMatch(expected: apps),
+            command: ActionCommand(executable: target.path,
+                                   args: target.isBundledEngine
+                                       ? BurrowConductor.engineArgv(fromMo: moArgs, assertDryRun: true)
+                                       : moArgs,
+                                   stdin: "", timeout: 120, elevated: false))
     }
 
     /// App names for wire payloads (uninstall carries them everywhere).
@@ -121,10 +212,20 @@ enum ActionSurface: Equatable {
 
 /// Engine-agnostic process recipe (RFC #48's engine will consume this).
 struct ActionCommand: Equatable {
+    /// The exact binary this recipe must be spawned against: the path `mint` resolved at the
+    /// moment it decided whether to translate `args`. Carried rather than looked up again,
+    /// because `args` is only correct relative to this file — a second discovery that answered
+    /// differently would hand one program the other's wire format. nil when nothing resolved.
+    var executable: String? = nil
     var args: [String]
     var stdin: String?
     var timeout: TimeInterval?
     var elevated: Bool
+
+    /// What to spawn. `/usr/bin/false` for an unresolved binary reproduces exactly the
+    /// degradation `MoEngine.capture` already applies to a `.mo` target it can't resolve — a
+    /// clean nonzero exit rather than a crash — without asking discovery a second question.
+    var spawnPath: String { executable ?? "/usr/bin/false" }
 }
 
 // MARK: - May we: the pure gate
@@ -154,9 +255,24 @@ enum BlockedReason: Equatable {
     }
 }
 
-enum ActionPreflight: Equatable {
-    /// Fail closed unless mo's matched set equals what was confirmed.
-    case verifyUninstallMatch(expected: [String])
+/// A check a real run must pass before it is allowed to touch anything, and the read-only probe
+/// that performs it — ONE value, because they are only meaningful together.
+///
+/// These used to be two independent optionals on `RunTicket`, which made "verify the match, with
+/// nothing to verify it against" a representable ticket. That state was never minted, but the
+/// consumers had to assume it wasn't: `MCP.execute` combined both optionals in a single `if`, so a
+/// policy with a nil probe would have skipped the guard and fallen straight through to the
+/// destructive apply — failing OPEN on an irreversible action, silently. Bundling them removes the
+/// state instead of asking every call site to remember to refuse it.
+struct ActionPreflight: Equatable {
+    enum Policy: Equatable {
+        /// Fail closed unless mo's matched set equals what was confirmed.
+        case verifyUninstallMatch(expected: [String])
+    }
+    let policy: Policy
+    /// The read-only probe that answers `policy`, built against the SAME resolved binary as the
+    /// ticket's `command` so the guard and the run it guards cannot describe different files.
+    let command: ActionCommand
 }
 
 /// A runnable, fully-specified action. Minted ONLY by `MoActions.decide`
@@ -165,6 +281,8 @@ struct RunTicket: Equatable {
     let action: MoAction
     let mode: RunMode
     let command: ActionCommand
+    /// The pre-flight this run must pass — policy and probe together, or nothing at all. Minted
+    /// here rather than rebuilt at the call site, so a consumer that finds one has the other.
     let preflight: ActionPreflight?
     /// Interactive-only redirect text (agent purge/installer downgrade).
     let note: String?
@@ -191,47 +309,79 @@ enum Verdict: Equatable {
 enum MoActions {
     /// The truth table. Pure: consent is data in the gate, a verdict comes
     /// out, and `.run` is the only way to obtain a ticket.
-    static func decide(_ action: MoAction, _ mode: RunMode, _ gate: ActionGate) -> Verdict {
+    ///
+    /// `resolve` is the one impure input, and it is asked at most ONCE per call — only on the
+    /// paths that actually mint, and never for a refusal. Callers that already resolved the
+    /// binary for their own UI (the Software tab's confirm sheet describes what a specific binary
+    /// is about to do) pass that answer in, so one user action means one resolution end to end.
+    static func decide(_ action: MoAction, _ mode: RunMode, _ gate: ActionGate,
+                       resolve: (_ elevated: Bool) -> EngineTarget = EngineTarget.resolve) -> Verdict {
         let spec = action.spec
         switch gate {
         case .agent(let actionsOptIn, let irreversibleOptIn):
             if mode == .preview {
-                return .run(mint(action, .preview, surface: .agent))
+                return .run(mint(action, .preview, surface: .agent, resolve: resolve))
             }
             if spec.interactiveOnly {
                 // Real run is TUI-only: DOWNGRADE to a preview ticket with
                 // the redirect note, instead of blocking or pretending.
                 return .run(mint(action, .preview, surface: .agent,
-                                 note: redirectNote(for: action)))
+                                 note: redirectNote(for: action), resolve: resolve))
             }
             guard actionsOptIn else { return .blocked(.agentCleanupsOptInOff) }
             if spec.severity == .irreversible, !irreversibleOptIn {
                 return .blocked(.agentUninstallOptInOff)
             }
-            return .run(mint(action, .real, surface: .agent))
+            return .run(mint(action, .real, surface: .agent, resolve: resolve))
 
         case .gui(let hasFDA, let userConfirmed, let elevationGranted):
             if mode == .real {
                 if spec.interactiveOnly { return .interactiveFlow }
                 if spec.needsExplicitConfirm, !userConfirmed { return .needsConfirmation }
-                return .run(mint(action, .real, surface: .gui))
+                return .run(mint(action, .real, surface: .gui, resolve: resolve))
             }
             // Previews: un-elevated TCC walks need FDA; "Scan with admin"
             // resolves the gate because root bypasses TCC.
             if spec.previewNeedsFDA, !hasFDA, !elevationGranted {
                 return .needsFullDiskAccess
             }
-            return .run(mint(action, .preview, surface: .gui, elevated: elevationGranted))
+            return .run(mint(action, .preview, surface: .gui, elevated: elevationGranted,
+                             resolve: resolve))
         }
     }
 
     private static func mint(_ action: MoAction, _ mode: RunMode,
                              surface: ActionSurface, elevated: Bool = false,
-                             note: String? = nil) -> RunTicket {
+                             note: String? = nil,
+                             resolve: (_ elevated: Bool) -> EngineTarget) -> RunTicket {
         let spec = action.spec
         let isElevated = elevated || (mode == .real && surface == .gui && spec.elevatedRealRunGUI)
+        // THE one resolution. Elevation is settled first because it changes which lookup is
+        // legitimate (elevated runs never accept a PATH hit), and the answer is then used for
+        // BOTH halves of this ticket: whether to translate the argv, and what to spawn. Nothing
+        // downstream resolves again — `ActionCommand.executable` carries this exact path, and
+        // both call sites spawn `.executable(command.spawnPath)` rather than `.mo`.
+        let target = resolve(isElevated)
+        let moArgs = action.argv(mode)
         let command = ActionCommand(
-            args: action.argv(mode),
+            executable: target.path,
+            // `action.argv(mode)` is mo-style — mo runs LIVE by default, `--dry-run` previews.
+            // The engine inverts that (dry-run by default, `--apply` to run for real), so a
+            // ticket bound for it is translated here, ONCE, for every surface and every mode
+            // alike — `BurrowConductor.engineArgv` is the same pure mapping the streaming GUI
+            // path uses, so there's exactly one place that knows the mo↔engine wire difference.
+            //
+            // TRANSLATE ONLY WHEN THE RESOLVED BINARY IS THE BUNDLED ENGINE. This is the same
+            // path-identity guard `OperationFlow.start` applies to its fallback spawn, and it is
+            // load-bearing in both directions. A shipped build always resolves the bundled engine
+            // (`trustedExecutable()`/`findExecutable()` both prefer it), so translation still
+            // happens there and the argv is unchanged. A build without a staged engine resolves
+            // whatever discovery finds — on a dev machine that is `/opt/homebrew/bin/mo` — and
+            // translating for THAT binary inverts the meaning of every ticket: engine-style
+            // `["clean"]`, minted for a PREVIEW because the engine's default is dry-run, is a
+            // legacy `mo`'s LIVE clean. A preview that deletes is the highest-severity bug this
+            // file can produce, so it may not depend on which build the code happens to be in.
+            args: target.isBundledEngine ? BurrowConductor.engineArgv(fromMo: moArgs) : moArgs,
             // mo uninstall is interactive ("Proceed? [y/N]" + "Enter confirm");
             // feed yes so a non-TTY run doesn't block forever. The gate +
             // preflight are the consent, not these answers.
@@ -239,9 +389,13 @@ enum MoActions {
                 ? String(repeating: "y\n", count: 4) : nil,
             timeout: timeout(action, mode, surface),
             elevated: isElevated)
+        let needsPreflight = mode == .real && spec.requiresMatchPreflight
         return RunTicket(action: action, mode: mode, command: command,
-                         preflight: (mode == .real && spec.requiresMatchPreflight)
-                             ? .verifyUninstallMatch(expected: action.wireApps ?? []) : nil,
+                         // Built from the SAME `target`, so the probe reads the plan of the
+                         // binary that is about to act on it — and reuses the resolution rather
+                         // than making a second one. `matchPreflight` returns the policy and that
+                         // probe as one value, so this can't hand a ticket half a pre-flight.
+                         preflight: needsPreflight ? action.matchPreflight(on: target) : nil,
                          note: note)
     }
 
@@ -270,9 +424,16 @@ enum MoActions {
 /// the redirect note are golden-tested; keys are emitted sorted so the
 /// bytes are stable. Additive changes only.
 enum ActionWire {
+    /// `error` / `kind` are the engine's classified failure, emitted ONLY when there was one —
+    /// additive, so every existing success/preview payload stays byte-identical. They exist
+    /// because the repoint moved the reason: the Rust engine writes an `ok:false` envelope to
+    /// stdout and nothing to stderr, so a failed action used to arrive as a bare non-zero
+    /// `exit_code` with the whole envelope stuffed into `output` as a string an agent had to
+    /// re-parse.
     static func result(command: String, dryRun: Bool, ran: Bool, exitCode: Int32,
                        output: String, apps: [String]? = nil, permanent: Bool? = nil,
-                       note: String? = nil, timedOutAfter: TimeInterval? = nil) -> String {
+                       note: String? = nil, timedOutAfter: TimeInterval? = nil,
+                       error: String? = nil, kind: String? = nil) -> String {
         let stripped = Ansi.strip(output)
         var obj: [String: Any] = [
             "command": command,
@@ -286,6 +447,8 @@ enum ActionWire {
         if let summary = summaryObject(stripped) { obj["summary"] = summary }
         if let apps { obj["apps"] = apps }
         if let permanent { obj["permanent"] = permanent }
+        if let error, !error.isEmpty { obj["error"] = error }
+        if let kind, !kind.isEmpty { obj["kind"] = kind }
         if let note {
             obj["interactive_only"] = true
             obj["note"] = note
@@ -312,16 +475,22 @@ enum ActionWire {
         return json(obj)
     }
 
-    static func uninstallAbort(apps: [String], matched: [String]?,
-                               mismatch: String? = nil) -> String {
-        var obj: [String: Any] = ["command": "uninstall", "ran": false, "apps": apps]
-        if let matched {
-            obj["matched"] = matched
-            obj["error"] = "aborted: mo matched a different set than requested "
-                + "(\(mismatch ?? "")). Use exact names from burrow_list_apps."
-        } else {
-            obj["error"] = "aborted: couldn't verify which apps mo matched"
-        }
+    /// `reason` is `UninstallGuard.abortReason`'s verdict — the ONE sentence a GUI user and an
+    /// agent both see, so neither surface invents its own guess at why nothing was removed.
+    ///
+    /// `matched` is the set the resolved binary said it would act on, when it said anything: the
+    /// echoed `apps[].query` from the engine, the parsed display names from a legacy `mo`, and nil
+    /// when the dry run was refused or unreadable. `engineError` is the dry run's OWN reason,
+    /// present only when that run itself failed — without it, an engine failure (a bad bundle id, a
+    /// permission denial) came back wearing a generic message that described the wrong thing.
+    ///
+    /// None of it changes the outcome: this function only ever emits `ran: false`.
+    static func uninstallAbort(apps: [String], reason: String,
+                               matched: [String]? = nil, engineError: String? = nil) -> String {
+        var obj: [String: Any] = ["command": "uninstall", "ran": false, "apps": apps,
+                                  "error": "aborted: " + reason]
+        if let engineError, !engineError.isEmpty { obj["engine_error"] = engineError }
+        if let matched { obj["matched"] = matched }
         return json(obj)
     }
 

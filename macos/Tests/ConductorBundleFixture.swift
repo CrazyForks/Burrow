@@ -5,8 +5,8 @@
 //  Lets a test say which build it is exercising — one that bundled the `burrow` conductor, or
 //  one that didn't — instead of inheriting whichever the test host happened to stage.
 //
-//  Resources/burrow is produced by the "Bundle burrow (conductor)" phase, which is gated on a
-//  populated vendor/burrow-cli checkout. CI never fetches submodules, so it always tested the
+//  Resources/burrow is produced by the "Bundle burrow-engine (MIT)" phase, which is gated on a
+//  populated vendor/burrow-engine checkout. CI never fetches submodules, so it always tested the
 //  absent case; a developer who checked the submodule out (required for Network, Orphans and
 //  Photos to do anything) always tested the present case and saw unrelated failures.
 //

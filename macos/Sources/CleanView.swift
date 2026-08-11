@@ -150,10 +150,17 @@ struct CleanView: View {
         realFlow.reset()
         // No cleanup plan: the engine chooses its own targets, so this routes
         // to the plain `clean` operation rather than the reviewed one.
-        realFlow.start(ToolOperation(
-            label: NSLocalizedString("Cleaning caches", comment: ""),
-            arguments: ["clean"], elevated: true,
-            reduce: { parseTaskReport($0) }, notifyOnEnd: true))
+        //
+        // `.moleStream` rather than a hand-built ToolOperation reducing with `parseTaskReport`:
+        // this is the one direct path that still spawns the ENGINE, and the engine streams
+        // NDJSON — the human-text marker grammar matches none of its shapes, so the run would
+        // clean for real and then report nothing. `BurrowStreamReport.reduce` falls back to
+        // `parseTaskReport` when the output isn't envelope-shaped, so an external mo still
+        // reads correctly. The plan-driven runs elsewhere in this file keep `parseTaskReport`
+        // because they spawn `/usr/bin/find`, which prints nothing either way.
+        realFlow.start(.moleStream(["clean"], elevated: true,
+                                   label: NSLocalizedString("Cleaning caches", comment: ""),
+                                   notifyOnEnd: true))
     }
 
     // MARK: - Scanning / result hero (2.1)
@@ -454,12 +461,16 @@ struct CleanView: View {
         ToolOperation(label: NSLocalizedString("Scanning caches", comment: ""),
                       arguments: ["clean", "--dry-run"],
                       gate: .fullDiskAccess(adminBypass: true),
+                      // The bundled engine streams NDJSON here too (this scan goes through the
+                      // same conductor `--stream` path as a real clean/optimize) — reduce with
+                      // BurrowStreamReport, not the old human-text parseTaskReport, or every scan
+                      // reads back "0 B found" with no summary and no forward path. See BurrowStreamReport.
                       reduce: { lines in
-                          let (groups, summary) = parseTaskReport(lines)
-                          let bytes = lines.reduce(Int64(0)) { $0 + CleanList.streamedItemBytes($1) }
+                          let (groups, summary) = BurrowStreamReport.reduce(lines)
+                          let bytes = lines.reduce(Int64(0)) { $0 + BurrowStreamReport.streamedBytes($1) }
                           return (groups, summary, bytes)
                       },
-                      hudLine: { TaskReportText.line($0) },
+                      hudLine: { BurrowStreamReport.hudLine($0) },
                       // The scan is the step people walk away from — it can run
                       // for minutes on a full disk and, unlike the clean, it ends
                       // by just sitting there with a number. Same opt-in the real

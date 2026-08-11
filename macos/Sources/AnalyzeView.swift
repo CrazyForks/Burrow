@@ -557,12 +557,17 @@ final class AnalyzeModel: ObservableObject {
         let proc = Process()
         proc.executableURL = burrow
         proc.arguments = ["analyze", "--progress", path]
-        var env = Foundation.ProcessInfo.processInfo.environment
-        if let dir = BurrowConductor.engineDir() { env["BURROW_ENGINE_DIR"] = dir.path }
-        proc.environment = env
+        // No explicit `.environment` — Process inherits the app's own environment as-is, which is
+        // all this needs (the engine is self-contained; there is no sibling directory to point it
+        // at, unlike the old conductor this call site used to inject BURROW_ENGINE_DIR for).
         let out = Pipe()
         proc.standardOutput = out
-        proc.standardError = Pipe()   // discard the human-readable line on stderr
+        // A Pipe here would NOT discard: it has a ~64KB buffer, and once `analyze --progress`
+        // writes past it the child blocks in write(), stops producing stdout, and the
+        // availableData loop below stalls until the 30 s killer fires — the scan then falls back
+        // to the slow per-child walk with nothing saying why. nullDevice genuinely discards,
+        // which is what ShellProbe does for the same reason.
+        proc.standardError = FileHandle.nullDevice
         try proc.run()
 
         // Bound the scan: a pathological tree (Home's package caches — millions of tiny files) can

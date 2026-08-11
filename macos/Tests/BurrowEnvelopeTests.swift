@@ -87,15 +87,11 @@ final class BurrowEnvelopeTests: XCTestCase {
                        ["status", "--json"])
     }
 
-    func testConductorEnvironment_pointsAtBundledEngine() {
-        let dir = URL(fileURLWithPath: "/Applications/Burrow.app/Contents/Resources/engine")
-        let env = BurrowConductor.environment(engineDir: dir)
-        XCTAssertEqual(env["BURROW_ENGINE_DIR"], dir.path)
-    }
-
-    func testConductorEnvironment_nilEngineDirLeavesItUnset() {
-        // A build without a bundled engine sets no override — the conductor resolves on its own.
-        XCTAssertNil(BurrowConductor.environment(engineDir: nil)["BURROW_ENGINE_DIR"])
+    func testConductorEnvironment_neverSetsEngineDir() {
+        // BURROW_ENGINE_DIR named the OLD conductor at the digger's runtime directory (a sibling
+        // Resources/engine this app layout never had post-repoint). The engine looks for nothing,
+        // so this key must never be (re)introduced.
+        XCTAssertNil(BurrowConductor.environment()["BURROW_ENGINE_DIR"])
     }
 
     // MARK: PATH augmentation (the Finder-launch trap — brew sidecars/engine shell-outs)
@@ -121,29 +117,171 @@ final class BurrowEnvelopeTests: XCTestCase {
         XCTAssertEqual(BurrowConductor.augmentedPATH(""), fallback)
     }
 
-    // MARK: streaming argv translation (safety-critical: mo↔burrow dry-run/apply INVERSION)
+    // MARK: mo→engine argv translation (safety-critical: dry-run/apply INVERSION)
+    //
+    // `engineArgv` is the semantic mapping every caller shares — MoActions's action catalog
+    // (MCP + the Software tab's uninstall) and this file's own streaming path alike. Test it
+    // directly, not just through `streamArgv`, since `MoActionsTests` pins the MoActions side of
+    // the same contract.
+
+    func testEngineArgv_preview_dropsDryRun_neverApply() {
+        // mo preview (`clean --dry-run`) maps to the engine's DEFAULT (dry-run) — must NOT gain
+        // --apply, or a "preview" would delete for real.
+        XCTAssertEqual(BurrowConductor.engineArgv(fromMo: ["clean", "--dry-run"]), ["clean"])
+    }
+
+    func testEngineArgv_live_addsApply() {
+        // mo live (`clean`, no --dry-run) needs --apply on the engine — or a real clean would
+        // silently no-op (the engine defaults to dry-run). This is the §2 bug in miniature.
+        XCTAssertEqual(BurrowConductor.engineArgv(fromMo: ["clean"]), ["clean", "--apply"])
+        XCTAssertEqual(BurrowConductor.engineArgv(fromMo: ["optimize"]), ["optimize", "--apply"])
+    }
+
+    func testEngineArgv_uninstallPreview_singleAndMultiApp() {
+        XCTAssertEqual(BurrowConductor.engineArgv(fromMo: ["uninstall", "--dry-run", "Slack"]),
+                       ["uninstall", "Slack"])
+        XCTAssertEqual(
+            BurrowConductor.engineArgv(fromMo: ["uninstall", "--dry-run", "Slack", "Zoom"]),
+            ["uninstall", "Slack", "Zoom"])
+    }
+
+    func testEngineArgv_uninstallLive_permanentFlagPassesThroughUntouched() {
+        // --permanent isn't part of the dry-run/apply inversion this function owns — it rides
+        // through unchanged either way. (The engine doesn't currently interpret it at all; see
+        // the accompanying report — that's a separate, already-flagged gap, not this mapping's job.)
+        XCTAssertEqual(
+            BurrowConductor.engineArgv(fromMo: ["uninstall", "--permanent", "Slack"]),
+            ["uninstall", "--permanent", "Slack", "--apply"])
+    }
+
+    // MARK: assertDryRun — read-only stated on the wire, not inherited from the engine's default
+
+    func testEngineArgv_assertDryRun_spellsTheFlagInsteadOfRelyingOnTheDefault() {
+        // Without it a preview is "no flag", which is read-only only for as long as the engine
+        // keeps defaulting that way. With it the argv says so — and `uninstall` is the command
+        // where that distinction now costs an application rather than a wrong screen.
+        XCTAssertEqual(
+            BurrowConductor.engineArgv(fromMo: ["uninstall", "--dry-run", "Slack"],
+                                       assertDryRun: true),
+            ["uninstall", "Slack", "--dry-run"])
+        XCTAssertEqual(
+            BurrowConductor.engineArgv(fromMo: ["uninstall", "--dry-run", "Slack", "Zoom"],
+                                       assertDryRun: true),
+            ["uninstall", "Slack", "Zoom", "--dry-run"])
+    }
+
+    func testEngineArgv_assertDryRun_forcesThePreviewEvenOnLiveMoArgv() {
+        // It means "this run must not change anything", not "pass the flag along if one was
+        // already there". A caller that asks for it on mo's LIVE spelling gets the preview, not
+        // a live run with an ignored parameter — the failure direction has to be the safe one.
+        XCTAssertEqual(BurrowConductor.engineArgv(fromMo: ["uninstall", "Slack"],
+                                                  assertDryRun: true),
+                       ["uninstall", "Slack", "--dry-run"])
+        XCTAssertEqual(BurrowConductor.engineArgv(fromMo: ["clean"], assertDryRun: true),
+                       ["clean", "--dry-run"])
+    }
+
+    func testEngineArgv_defaultIsOff_soEveryExistingCallerIsByteIdentical() {
+        // `mint`, `streamArgv` and OperationFlow all call the one-argument form. Adding a
+        // parameter must not have moved any of them.
+        for mo in [["clean"], ["clean", "--dry-run"], ["optimize"],
+                   ["uninstall", "--dry-run", "Slack"], ["uninstall", "--permanent", "Slack"]] {
+            XCTAssertEqual(BurrowConductor.engineArgv(fromMo: mo),
+                           BurrowConductor.engineArgv(fromMo: mo, assertDryRun: false), "\(mo)")
+        }
+    }
+
+    /// The one combination the engine refuses outright: `reject_contradictory_flags` answers
+    /// `--apply` + `--dry-run` with `ok:false` and **exit 2** ("uninstall cannot take both …"),
+    /// before dispatch reaches the command. Verified against burrow-engine @ `4a46426`, both
+    /// orderings. So a translation that could emit the pair doesn't delete anything — it turns
+    /// every uninstall into an unreadable failure — but the pre-flight would then abort on a
+    /// format problem rather than on what the engine actually said, which is the wrong sentence
+    /// in front of the user and one refactor away from being the wrong outcome too.
+    ///
+    /// Swept over both the mo spellings and both parameter values rather than pinned by example:
+    /// the guarantee is structural (the two appends are the arms of one `if`), so the test that
+    /// matches it is exhaustive, not illustrative.
+    func testEngineArgv_neverEmitsApplyAndDryRunTogether() {
+        let moShapes: [[String]] = [
+            ["clean"], ["clean", "--dry-run"],
+            ["optimize"], ["optimize", "--dry-run"],
+            ["purge"], ["purge", "--dry-run"],
+            ["installer"], ["installer", "--dry-run"],
+            ["uninstall", "Slack"], ["uninstall", "--dry-run", "Slack"],
+            ["uninstall", "--permanent", "Slack"],
+            ["uninstall", "--permanent", "--dry-run", "Slack", "Zoom"],
+        ]
+        for mo in moShapes {
+            for assert in [false, true] {
+                let out = BurrowConductor.engineArgv(fromMo: mo, assertDryRun: assert)
+                XCTAssertFalse(out.contains("--apply") && out.contains("--dry-run"),
+                               "\(mo) assertDryRun:\(assert) → \(out): the engine refuses this " +
+                               "pair at exit 2 and no argv this function builds may contain it")
+                // Belt and braces on the same fact: at most one of the two, ever.
+                XCTAssertLessThanOrEqual(
+                    out.filter { $0 == "--apply" || $0 == "--dry-run" }.count, 1, "\(out)")
+            }
+        }
+        // And `streamArgv`, which only ever adds a transport flag on top.
+        for mo in moShapes {
+            let out = BurrowConductor.streamArgv(fromMo: mo)
+            XCTAssertFalse(out.contains("--apply") && out.contains("--dry-run"), "\(out)")
+        }
+    }
 
     func testStreamArgv_preview_dropsDryRun_neverApply() {
-        // mo preview (`clean --dry-run`) maps to burrow's DEFAULT (dry-run) — must NOT gain
-        // --apply, or a "preview" would delete for real.
+        // Delegates to engineArgv, plus the transport-only --stream.
         XCTAssertEqual(BurrowConductor.streamArgv(fromMo: ["clean", "--dry-run"]),
                        ["clean", "--stream"])
     }
 
     func testStreamArgv_live_addsApply() {
-        // mo live (`clean`, no --dry-run) needs --apply on burrow — or a real clean would silently
-        // no-op (burrow defaults to dry-run).
         XCTAssertEqual(BurrowConductor.streamArgv(fromMo: ["clean"]),
                        ["clean", "--apply", "--stream"])
         XCTAssertEqual(BurrowConductor.streamArgv(fromMo: ["optimize"]),
                        ["optimize", "--apply", "--stream"])
     }
 
+    // MARK: streamOverride / shouldStreamViaConductor
+
+    func testShouldStreamViaConductor_onByDefault() {
+        // `streamingEnabled` is `?? true` (see its doc: "Default ON, hand-validated on a real
+        // build") — with no UserDefaults key set (the CI/fresh-launch case), clean/optimize stream
+        // through the conductor unless someone explicitly turns the switch off. An earlier version
+        // of this test asserted the OPPOSITE — that the switch defaults OFF — which doesn't match
+        // `streamingEnabled`'s own `?? true` fallback and failed in exactly the environment (no
+        // host app, no launch args) it claimed to cover.
+        withStreamSwitch(nil) {
+            XCTAssertTrue(BurrowConductor.shouldStreamViaConductor(command: "clean"))
+            XCTAssertTrue(BurrowConductor.shouldStreamViaConductor(command: "optimize"))
+        }
+    }
+
+    func testShouldStreamViaConductor_explicitlyOff_disablesStreaming() {
+        withStreamSwitch(false) {
+            XCTAssertFalse(BurrowConductor.shouldStreamViaConductor(command: "clean"))
+            XCTAssertFalse(BurrowConductor.shouldStreamViaConductor(command: "optimize"))
+        }
+    }
+
+    func testShouldStreamViaConductor_onlyClean_andOptimize_whenSwitchIsOn() {
+        withStreamSwitch(true) {
+            XCTAssertTrue(BurrowConductor.shouldStreamViaConductor(command: "clean"))
+            XCTAssertTrue(BurrowConductor.shouldStreamViaConductor(command: "optimize"))
+            // purge/installer are the interactive PTY flow; uninstall is matcher-gated — neither is
+            // ever streamed, switch on or off.
+            XCTAssertFalse(BurrowConductor.shouldStreamViaConductor(command: "purge"))
+            XCTAssertFalse(BurrowConductor.shouldStreamViaConductor(command: "installer"))
+            XCTAssertFalse(BurrowConductor.shouldStreamViaConductor(command: "uninstall"))
+        }
+    }
+
     /// No conductor staged → no override, whatever the switch says, because there is nothing to
     /// route to. This is the fallback every call site depends on.
     func testStreamOverride_withoutBundledConductor_keepsDirectEngine() {
         ConductorBundleFixture.withConductor(present: false) {
-            XCTAssertNil(BurrowConductor.streamOverride(moArgs: ["clean"], elevated: false))
+            XCTAssertNil(BurrowConductor.streamOverride(moArgs: ["clean"]))
         }
     }
 
@@ -157,7 +295,7 @@ final class BurrowEnvelopeTests: XCTestCase {
     func testStreamOverride_withBundledConductor_routesThroughItByDefault() {
         withStreamSwitch(nil) {
             ConductorBundleFixture.withConductor(present: true) {
-                let override = BurrowConductor.streamOverride(moArgs: ["clean"], elevated: false)
+                let override = BurrowConductor.streamOverride(moArgs: ["clean"])
                 XCTAssertEqual(override?.arguments, ["clean", "--apply", "--stream"])
                 XCTAssertEqual(URL(fileURLWithPath: override?.executable ?? "").lastPathComponent, "burrow")
             }
@@ -168,17 +306,25 @@ final class BurrowEnvelopeTests: XCTestCase {
     func testStreamOverride_killSwitchKeepsDirectEngineEvenWithConductorBundled() {
         withStreamSwitch(false) {
             ConductorBundleFixture.withConductor(present: true) {
-                XCTAssertNil(BurrowConductor.streamOverride(moArgs: ["clean"], elevated: false))
+                XCTAssertNil(BurrowConductor.streamOverride(moArgs: ["clean"]))
             }
         }
     }
 
-    func testStreamOverride_elevatedAlwaysDirect() {
-        // Elevated runs (osascript, fresh env) stay on mo even with the switch on — and this is
-        // only meaningful on a build that HAS a conductor to be tempted by.
+    /// The inverse of the assertion this replaces. `streamOverride` used to take an `elevated`
+    /// flag and return nil for every elevated run; that guard meant `CleanView`/`TuneUpView`'s
+    /// real clean/optimize (the app's only GUI callers of `.moleStream`, all `elevated: true`)
+    /// never received the mo→engine argv translation, so every actual Clean/Optimize button fell
+    /// through to the direct-engine path with untranslated argv — which the engine reads with
+    /// inverted dry-run/apply meaning. The parameter is gone (see `shouldStreamViaConductor`'s
+    /// doc); elevation now decides osascript-vs-plain-spawn in `SystemProcessPort` and nothing
+    /// else. An elevated run must therefore route exactly like an unelevated one.
+    func testStreamOverride_elevatedRunsRouteThroughTheConductorToo() {
         withStreamSwitch(true) {
             ConductorBundleFixture.withConductor(present: true) {
-                XCTAssertNil(BurrowConductor.streamOverride(moArgs: ["clean"], elevated: true))
+                // The argv an elevated LIVE clean produces — `--apply`, so it actually deletes.
+                let override = BurrowConductor.streamOverride(moArgs: ["clean"])
+                XCTAssertEqual(override?.arguments, ["clean", "--apply", "--stream"])
             }
         }
     }

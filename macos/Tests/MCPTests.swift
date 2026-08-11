@@ -93,6 +93,51 @@ final class MCPTests: XCTestCase {
         XCTAssertEqual(obj["blocked"] as? Bool, true)
     }
 
+    /// A tool description is the only thing an agent has to go on, so it has to describe what the
+    /// tool DOES — and this one's answer has now changed twice. It used to be told to say
+    /// "DOES NOT UNINSTALL THE APPLICATION", which was true while the engine removed only
+    /// `~/Library` leftovers and is false since burrow-engine @ df9ea3f removed the bundle too.
+    /// What an agent must be able to read off it now: the app really goes, where it goes, that
+    /// Homebrew is a different mechanism with an unbounded `--zap`, that outcomes are per app, and
+    /// that identifiers are bundle ids — display names are not unique on a real machine (three
+    /// `Restarter`s, two `Steam`s in a 135-app inventory).
+    func testUninstallDescriptor_saysTheAppIsRemovedWhereItGoesAndAsksForABundleId() throws {
+        let tool = try XCTUnwrap(catalog.descriptors().first { $0["name"] as? String == "burrow_uninstall" })
+        let description = try XCTUnwrap(tool["description"] as? String)
+        XCTAssertFalse(description.contains("DOES NOT UNINSTALL THE APPLICATION"),
+                       "the engine removes the .app now — that warning is the false claim: \(description)")
+        XCTAssertTrue(description.contains("the .app bundle itself"), description)
+        XCTAssertTrue(description.contains("move to the Trash"),
+                      "where the app goes is the thing a user is told afterwards: \(description)")
+        XCTAssertTrue(description.contains("permanent"), description)
+        XCTAssertTrue(description.contains("brew uninstall --cask --zap"),
+                      "the --zap is the part that removes bytes no preview can list: \(description)")
+        XCTAssertTrue(description.contains("partial"),
+                      "an agent must know a run can half-succeed per app: \(description)")
+        XCTAssertTrue(description.contains("bundle_id"),
+                      "an agent must be told which identifier to send: \(description)")
+
+        let schema = try XCTUnwrap(tool["inputSchema"] as? [String: Any])
+        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+        let apps = try XCTUnwrap(properties["apps"] as? [String: Any])
+        XCTAssertTrue(try XCTUnwrap(apps["description"] as? String).contains("bundle_id"))
+        let permanent = try XCTUnwrap(properties["permanent"] as? [String: Any])
+        XCTAssertTrue(try XCTUnwrap(permanent["description"] as? String).contains("Trash"),
+                      "the flag's description has to say what it bypasses")
+    }
+
+    /// `burrow_list_apps` is where an agent is told to get that identifier, so it has to name the
+    /// fields it returns, warn about the `"unknown"` rows that cannot be targeted at all, and flag
+    /// the Homebrew rows — those are the ones for which "it's in the Trash" is not true.
+    func testListAppsDescriptor_pointsAtBundleIdAndFlagsTheUnknownAndHomebrewRows() throws {
+        let tool = try XCTUnwrap(catalog.descriptors().first { $0["name"] as? String == "burrow_list_apps" })
+        let description = try XCTUnwrap(tool["description"] as? String)
+        XCTAssertTrue(description.contains("bundle_id"), description)
+        XCTAssertTrue(description.contains("not unique"), description)
+        XCTAssertTrue(description.contains("unknown"), description)
+        XCTAssertTrue(description.contains("Homebrew"), description)
+    }
+
     func testDescriptors_listsAllToolsWithSchema() {
         let d = catalog.descriptors()
         let names = d.compactMap { $0["name"] as? String }
@@ -262,6 +307,173 @@ final class MCPTests: XCTestCase {
         let json = ToolCatalog.cleanupHistoryResult(exitCode: 0, stdout: "   \n")
         let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         XCTAssertEqual((obj["sessions"] as? [Any])?.count, 0)
+    }
+
+    // MARK: - Envelope unwrapping (the bundled engine ALWAYS wraps `history --json`; passing that
+    // straight through used to hand an agent the WRONG SHAPE — an envelope where this tool has
+    // always promised the bare `{"sessions":[…]}` contract). Fixture captured verbatim from
+    // `burrow-engine history --json --limit 2` (0.1.0) — shape matches this repo's own
+    // `history.golden.json` (logs/limit/sessions/deletions under `data`).
+
+    func testCleanupHistory_realEngineEnvelope_unwrapsSessionsToTopLevel() throws {
+        let envelope = #"{"ok":true,"burrow_cli":"0.1.0","engine":"burrow-engine","command":"history","data":{"logs":{"operations":"/Users/henry/Library/Logs/mole/operations.log","deletions":"/Users/henry/Library/Logs/mole/deletions.log"},"limit":2,"sessions":[{"command":"optimize","started_at":"2026-07-25 08:27:26","ended_at":"2026-07-25 08:27:30","items":22,"size":"0B","operation_count":0,"actions":{"removed":0,"trashed":0,"skipped":0,"failed":0,"rebuilt":0,"other":0}},{"command":"clean","started_at":"2026-07-25 08:25:50","ended_at":"2026-07-25 08:27:25","items":647,"size":"585.5MB","operation_count":162,"actions":{"removed":0,"trashed":0,"skipped":162,"failed":0,"rebuilt":0,"other":0}}],"deletions":[]}}"#
+        let json = ToolCatalog.cleanupHistoryResult(exitCode: 0, stdout: envelope)
+        let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertNil(obj["ok"], "must be unwrapped, not the raw envelope")
+        XCTAssertNil(obj["data"], "sessions belongs at the top level, not nested under data")
+        let sessions = try XCTUnwrap(obj["sessions"] as? [[String: Any]])
+        XCTAssertEqual(sessions.count, 2)
+        XCTAssertEqual(sessions.first?["command"] as? String, "optimize")
+        // A bonus over the bare pre-repoint contract, not a requirement — but must survive.
+        XCTAssertNotNil(obj["logs"])
+    }
+
+    func testCleanupHistory_engineErrorEnvelope_yieldsErrorObjectNotThePassthroughEnvelope() throws {
+        let envelope = #"{"ok":false,"burrow_cli":"0.1.0","engine":"burrow-engine","command":"history","error":{"kind":"error","message":"boom","platform":"macos"}}"#
+        let json = ToolCatalog.cleanupHistoryResult(exitCode: 0, stdout: envelope)
+        let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertEqual(obj["error"] as? String, "boom")
+        XCTAssertEqual((obj["sessions"] as? [Any])?.count, 0)
+    }
+
+    // MARK: - burrow_uninstall's `apps[]`: what an agent may put on a deleting argv
+    //
+    // This surface honours `permanent: true` (`MoActions.argv`), so a value that resolves to the
+    // wrong application here is an outright delete of it — no Trash, nothing to put back. The GUI
+    // refused three values; this one trimmed whitespace and dropped empties, and the difference
+    // was reachable in a single call.
+
+    func testUninstallApps_refusesTheUnknownSentinelBurrowListAppsHandsOut() {
+        // Live against the bundled engine at df9ea3f: `uninstall --dry-run unknown` resolves to
+        // Synergy — `removes_applications: 1`, `unmatched: []`, `ambiguous: []`, `refusal: null`.
+        // Nothing downstream disagreed with itself, because nothing downstream was comparing the
+        // request against the application.
+        for bad in ["unknown", "UNKNOWN", " unknown "] {
+            XCTAssertThrowsError(try ToolCatalog.uninstallApps(["apps": [bad]]),
+                                 "\(bad.debugDescription) must not reach argv") { error in
+                guard case MCPToolError.badArguments(let message) = error else {
+                    return XCTFail("expected badArguments, got \(error)")
+                }
+                XCTAssertTrue(message.contains("name"), message)
+            }
+        }
+    }
+
+    func testUninstallApps_refusesAFlagShapedArgumentAndAnEmptyList() {
+        XCTAssertThrowsError(try ToolCatalog.uninstallApps(["apps": ["-permanent"]]),
+                             "a leading `-` is skipped by the engine's positional scan, so the run "
+                             + "would act on fewer apps than it reported")
+        XCTAssertThrowsError(try ToolCatalog.uninstallApps(["apps": ["   "]]))
+        XCTAssertThrowsError(try ToolCatalog.uninstallApps([:]))
+    }
+
+    func testUninstallApps_stillAcceptsARealBundleIdOrAnAppsOwnName() throws {
+        XCTAssertEqual(try ToolCatalog.uninstallApps(["apps": [" eu.exelban.Stats ", "Synergy"]]),
+                       ["eu.exelban.Stats", "Synergy"],
+                       "an app with no CFBundleIdentifier is still removable — by its name")
+    }
+
+    // MARK: - A partial uninstall is not "didn't run"
+    //
+    // Real capture, `burrow-engine uninstall --apply --permanent` over TWO purpose-built scratch
+    // bundles under a temporary `$HOME` — one whose path a protection rail declines, one ordinary.
+    // No installed application was passed to `--apply`. It exits **1** with an **`ok:true`**
+    // envelope (`i32::from(failed)`), having deleted one of the two applications.
+    private static let applyPartialAcrossApps = #"{"ok":true,"burrow_cli":"0.1.0","engine":"burrow-engine","command":"uninstall","data":{"dry_run":false,"freed_bytes":399,"freed_human":"399B","applications_removed":1,"applications_refused":1,"warnings":[],"removed":[{"path":"/private/tmp/claude-501/-Users-henry-Desktop-Burrow/447eac01-68b0-4709-9b47-4353173bbf3b/scratchpad/fakehome/Applications/BurrowScratchOK.app","size":388,"bundle_id":"dev.caezium.burrow.scratch.ok","kind":"application"},{"path":"/private/tmp/claude-501/-Users-henry-Desktop-Burrow/447eac01-68b0-4709-9b47-4353173bbf3b/scratchpad/fakehome/Library/Application Support/dev.caezium.burrow.scratch.ok","size":5,"bundle_id":"dev.caezium.burrow.scratch.ok","kind":"leftover"},{"path":"/private/tmp/claude-501/-Users-henry-Desktop-Burrow/447eac01-68b0-4709-9b47-4353173bbf3b/scratchpad/fakehome/Library/Caches/dev.caezium.burrow.scratch.ok","size":6,"bundle_id":"dev.caezium.burrow.scratch.ok","kind":"leftover"}],"errors":[{"path":"/private/tmp/claude-501/-Users-henry-Desktop-Burrow/447eac01-68b0-4709-9b47-4353173bbf3b/scratchpad/fakehome/Applications/BurrowScratchControlCenter.app","error":"protected path skipped: /private/tmp/claude-501/-Users-henry-Desktop-Burrow/447eac01-68b0-4709-9b47-4353173bbf3b/scratchpad/fakehome/Applications/BurrowScratchControlCenter.app","bundle_id":"dev.caezium.burrow.scratch.refused","kind":"application"}],"protected":["/private/tmp/claude-501/-Users-henry-Desktop-Burrow/447eac01-68b0-4709-9b47-4353173bbf3b/scratchpad/fakehome/Applications/BurrowScratchControlCenter.app"],"apps":[{"query":"dev.caezium.burrow.scratch.refused","name":"BurrowScratchControlCenter","bundle_id":"dev.caezium.burrow.scratch.refused","path":"/private/tmp/claude-501/-Users-henry-Desktop-Burrow/447eac01-68b0-4709-9b47-4353173bbf3b/scratchpad/fakehome/Applications/BurrowScratchControlCenter.app","status":"refused","application":{"path":"/private/tmp/claude-501/-Users-henry-Desktop-Burrow/447eac01-68b0-4709-9b47-4353173bbf3b/scratchpad/fakehome/Applications/BurrowScratchControlCenter.app","state":"refused","via":null,"bytes":0,"reason":"protected path skipped: /private/tmp/claude-501/-Users-henry-Desktop-Burrow/447eac01-68b0-4709-9b47-4353173bbf3b/scratchpad/fakehome/Applications/BurrowScratchControlCenter.app","suggestion":null},"removed_count":0,"leftover_freed_bytes":0,"error_count":0,"protected_count":0,"freed_bytes":0,"freed_human":"0B","leftovers_attempted":false},{"query":"dev.caezium.burrow.scratch.ok","name":"BurrowScratchOK","bundle_id":"dev.caezium.burrow.scratch.ok","path":"/private/tmp/claude-501/-Users-henry-Desktop-Burrow/447eac01-68b0-4709-9b47-4353173bbf3b/scratchpad/fakehome/Applications/BurrowScratchOK.app","status":"removed","application":{"path":"/private/tmp/claude-501/-Users-henry-Desktop-Burrow/447eac01-68b0-4709-9b47-4353173bbf3b/scratchpad/fakehome/Applications/BurrowScratchOK.app","state":"removed","via":"permanent","bytes":388,"reason":null,"suggestion":null},"removed_count":2,"leftover_freed_bytes":11,"error_count":0,"protected_count":0,"freed_bytes":399,"freed_human":"399B","leftovers_attempted":true}],"unmatched":[]}}"#
+
+    /// `ran` is documented on the wire as a CLAIM about the disk. An application was deleted here,
+    /// so the claim is true — and the old rule (`exitCode == 0 && !reportsFailure`) said false,
+    /// which is the wrong answer in the direction that matters.
+    func testRealRunClaim_aPartialUninstallReportsThatItRan() {
+        let claim = ToolCatalog.realRunClaim(exitCode: 1, stdout: Self.applyPartialAcrossApps,
+                                             stderr: "")
+        XCTAssertFalse(BurrowEnvelope.reportsFailure(stdout: Self.applyPartialAcrossApps),
+                       "the fixture is the trap: exit 1 over an ok:true envelope")
+        XCTAssertTrue(claim.ran, "one of the two applications was deleted")
+    }
+
+    /// And the reason string is the engine's own per-app account, not the whole JSON document —
+    /// which is what `failureReason`'s raw-stdout fallback returned, because a success envelope
+    /// carries no `error.message` for it to classify.
+    func testRealRunClaim_reportsThePerAppAccountNotTheEnvelopeItself() throws {
+        let claim = ToolCatalog.realRunClaim(exitCode: 1, stdout: Self.applyPartialAcrossApps,
+                                             stderr: "")
+        let error = try XCTUnwrap(claim.error)
+        XCTAssertFalse(error.contains("\"burrow_cli\""),
+                       "the error must not be the envelope document: \(error.prefix(120))")
+        XCTAssertTrue(error.contains("BurrowScratchControlCenter"), error)
+        XCTAssertTrue(error.contains("protected path skipped"), error)
+        XCTAssertFalse(error.contains("BurrowScratchOK"),
+                       "the app that came away cleanly is not a problem to report: \(error)")
+    }
+
+    /// A run the engine refused outright removed nothing, and still says so.
+    func testRealRunClaim_aFullyRefusedRunDidNotRun() throws {
+        let refusedBoth = Self.applyPartialAcrossApps
+            .replacingOccurrences(of: #""applications_removed":1"#, with: #""applications_removed":0"#)
+            .replacingOccurrences(of: #""removed_count":2"#, with: #""removed_count":0"#)
+            .replacingOccurrences(of: #""status":"removed""#, with: #""status":"refused""#)
+        let claim = ToolCatalog.realRunClaim(exitCode: 1, stdout: refusedBoth, stderr: "")
+        XCTAssertFalse(claim.ran)
+        XCTAssertNotNil(claim.error)
+    }
+
+    /// Nothing about a legacy `mo` or a clean run changes: no envelope to decode, so the exit code
+    /// still decides, and a zero exit is still a run.
+    func testRealRunClaim_fallsBackToTheExitCodeWhenThereIsNoEngineOutcome() {
+        XCTAssertTrue(ToolCatalog.realRunClaim(exitCode: 0, stdout: "Removed 1 app", stderr: "").ran)
+        XCTAssertFalse(ToolCatalog.realRunClaim(exitCode: 1, stdout: "", stderr: "boom").ran)
+        XCTAssertEqual(ToolCatalog.realRunClaim(exitCode: 1, stdout: "", stderr: "boom").error, "boom")
+    }
+
+    // MARK: - Deletions log path (Fix 1, secondary check: `logs` sits under `data` in a real
+    // envelope, not at the top level — the pre-fix code read the top level directly and always
+    // missed it, silently falling back to the (today accidentally-correct) hardcoded path).
+
+    func testDeletionsLogPath_realEngineEnvelope_readsNestedDataLogs() {
+        let envelope = #"{"ok":true,"burrow_cli":"0.1.0","engine":"burrow-engine","command":"history","data":{"logs":{"operations":"/Users/henry/Library/Logs/mole/operations.log","deletions":"/Users/henry/Library/Logs/mole/deletions.log"},"limit":20,"sessions":[],"deletions":[]}}"#
+        XCTAssertEqual(ToolCatalog.deletionsLogPath(fromCaptureStdout: envelope),
+                       "/Users/henry/Library/Logs/mole/deletions.log")
+    }
+
+    func testDeletionsLogPath_legacyTopLevelShape_stillReads() {
+        let legacy = #"{"logs":{"operations":"/x/operations.log","deletions":"/x/deletions.log"},"sessions":[]}"#
+        XCTAssertEqual(ToolCatalog.deletionsLogPath(fromCaptureStdout: legacy), "/x/deletions.log")
+    }
+
+    func testDeletionsLogPath_garbage_returnsNil() {
+        XCTAssertNil(ToolCatalog.deletionsLogPath(fromCaptureStdout: "not json"))
+        XCTAssertNil(ToolCatalog.deletionsLogPath(fromCaptureStdout: ""))
+    }
+
+    // MARK: - burrow_list_apps: an explicit error an agent can act on, never an empty list next
+    // to it that reads as "no apps installed" (the engine has no `--list` at all post-repoint).
+
+    func testListApps_engineHasNoListCommand_yieldsExplicitErrorNoAppsKey() throws {
+        // `burrow-engine uninstall --list` finds no non-flag arg, so it answers its own "needs an
+        // app bundle id" error envelope on STDOUT at exit 1 (never stderr) — captured verbatim.
+        let stdout = #"{"ok":false,"burrow_cli":"0.1.0","engine":"burrow-engine","command":"uninstall","error":{"kind":"error","message":"uninstall needs an app bundle id (e.g. com.foo.Bar)","platform":"macos"}}"#
+        let json = ToolCatalog.listAppsToolResult(exitCode: 1, stdout: stdout, stderr: "")
+        let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertNotNil(obj["error"], "must surface an explicit error")
+        XCTAssertNil(obj["apps"], "must NOT carry an empty apps list next to the error — an agent "
+                     + "that reads .apps without checking .error first must not find \"no apps\"")
+    }
+
+    func testListApps_moAbsent_yieldsExplicitErrorNoAppsKey() throws {
+        let json = ToolCatalog.listAppsToolResult(exitCode: 127, stdout: "", stderr: "")
+        let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertNotNil(obj["error"])
+        XCTAssertNil(obj["apps"])
+    }
+
+    func testListApps_realList_passesThroughVerbatim() {
+        let stdout = #"[{"name":"Slack","bundle_id":"com.tinyspeck.slackmacgap","path":"/Applications/Slack.app","size":"250MB"}]"#
+        XCTAssertEqual(ToolCatalog.listAppsToolResult(exitCode: 0, stdout: stdout, stderr: ""), stdout)
+    }
+
+    func testListApps_realListEmptyOutput_yieldsEmptyAppsObject() {
+        XCTAssertEqual(ToolCatalog.listAppsToolResult(exitCode: 0, stdout: "   ", stderr: ""), "{\"apps\":[]}")
     }
 
     func testDeletedFiles_emptyLog_yieldsZeroCount() throws {
